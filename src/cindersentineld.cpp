@@ -200,7 +200,6 @@ int main(int argc, char **argv)
 
     struct bpf_tc_opts tc_opts = {};
     tc_opts.sz = sizeof(tc_opts);
-    tc_opts.attach_point = BPF_TC_INGRESS;
     tc_opts.handle = 1;
     tc_opts.priority = 1;
 
