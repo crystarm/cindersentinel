@@ -185,13 +185,16 @@ int main(int argc, char **argv)
 
     signal(SIGINT, HandleSignal);
     signal(SIGTERM, HandleSignal);
-
     struct bpf_tc_hook hook = {};
+
     hook.sz = sizeof(hook);
     hook.ifindex = (int)ifindex;
     hook.attach_point = BPF_TC_INGRESS;
 
+    bpf_tc_hook_destroy(&hook);
+
     int rc = bpf_tc_hook_create(&hook);
+
     if (rc != 0 && rc != -EEXIST)
     {
         std::cerr << "bpf_tc_hook_create failed: " << rc << "\n";
@@ -216,11 +219,13 @@ int main(int argc, char **argv)
     }
 
     bpf_object *object = bpf_object__open_file(options.object_path.c_str(), nullptr);
-    if (!object)
+    int object_error = libbpf_get_error(object);
+    if (object_error)
     {
-        std::cerr << "bpf_object__open_file failed\n";
+        std::cerr << "bpf_object__open_file failed: " << strerror(-object_error) << " (" << object_error << ")\n";
         return 1;
     }
+
 
     rc = bpf_object__load(object);
     if (rc != 0)
@@ -231,16 +236,21 @@ int main(int argc, char **argv)
     }
 
     bpf_program *program = nullptr;
-    bpf_object__for_each_program(program, object)
+    bool program_found = false;
+
+    bpf_program *current = nullptr;
+    bpf_object__for_each_program(current, object)
     {
-        const char *sec = bpf_program__section_name(program);
-        if (sec && options.section_name == sec)
+        const char *section = bpf_program__section_name(current);
+        if (section && options.section_name == section)
         {
+            program = current;
+            program_found = true;
             break;
         }
     }
 
-    if (!program)
+    if (!program_found)
     {
         std::cerr << "Program section not found: " << options.section_name << "\n";
         bpf_object__close(object);
@@ -298,11 +308,18 @@ int main(int argc, char **argv)
         usleep((useconds_t)options.interval_ms * 1000);
     }
 
-    rc = bpf_tc_detach(&hook, &tc_opts);
-    if (rc != 0)
+    bpf_tc_opts detach_opts = {};
+    detach_opts.sz = sizeof(detach_opts);
+    detach_opts.handle = tc_opts.handle;
+    detach_opts.priority = tc_opts.priority;
+
+    rc = bpf_tc_detach(&hook, &detach_opts);
+    if (rc != 0 && rc != -ENOENT)
     {
-        std::cerr << "bpf_tc_detach failed: " << rc << "\n";
+        std::cerr << "bpf_tc_detach failed: " << strerror(-rc) << " (" << rc << ")\n";
     }
+
+    bpf_tc_hook_destroy(&hook);
 
     bpf_object__close(object);
     std::cout << "Stopped\n";
