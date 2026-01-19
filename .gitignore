@@ -1,1 +1,9 @@
-build
+.gitignore
+
+build*/
+
+push
+connect
+
+cs_vm_key
+cs_vm_key.pub

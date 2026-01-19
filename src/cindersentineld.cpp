@@ -265,10 +265,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    bpf_map *counters_map = bpf_object__find_map_by_name(object, "cindersentinel_counters");
+    bpf_map *counters_map = bpf_object__find_map_by_name(object, "cs_cnt");
     if (!counters_map)
     {
-        std::cerr << "Map not found: cindersentinel_counters\n";
+        std::cerr << "Map not found: cs_cnt\n";
         bpf_object__close(object);
         return 1;
     }

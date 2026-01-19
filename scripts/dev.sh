@@ -16,12 +16,12 @@ Usage:
   ${SCRIPT_DIR}/dev.sh xdp-on           - attach xdp (generic) on cs-a/${IFACE_A}
   ${SCRIPT_DIR}/dev.sh xdp-off          - detach xdp
   ${SCRIPT_DIR}/dev.sh counters         - watch counters map
-  ${SCRIPT_DIR}/dev.sh clean            - alias for down
 
-Environment overrides (optional):
-  NS_A=${NS_A} NS_B=${NS_B}
-  IFACE_A=${IFACE_A} IFACE_B=${IFACE_B}
-  IP_A=${IP_A} IP_B=${IP_B}
+  ${SCRIPT_DIR}/dev.sh icmp on|off|show
+  ${SCRIPT_DIR}/dev.sh tcp  block|unblock|show <port?>
+  ${SCRIPT_DIR}/dev.sh udp  block|unblock|show <port?>
+
+  ${SCRIPT_DIR}/dev.sh clean            - alias for down
 USAGE
 }
 
@@ -60,6 +60,10 @@ case "${cmd}" in
 
   counters)
     sudo -E "${SCRIPT_DIR}/watch-counters.sh" "$@"
+    ;;
+
+  icmp|tcp|udp)
+    sudo -E "${SCRIPT_DIR}/rules.sh" "${cmd}" "$@"
     ;;
 
   -h|--help|"")

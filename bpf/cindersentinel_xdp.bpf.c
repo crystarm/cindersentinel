@@ -1,9 +1,11 @@
 #include <linux/bpf.h>
+#include <stdbool.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
+#include <linux/in.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
-#include <linux/icmp.h>
+
 
 
 #include <bpf/bpf_helpers.h>
@@ -25,7 +27,7 @@ struct
     __uint(max_entries, CINDERSENTINEL_COUNTER_MAX);
     __type(key, __u32);
     __type(value, __u64);
-} cindersentinel_counters SEC(".maps");
+} cs_cnt SEC(".maps");
 
 struct
 {
@@ -33,7 +35,7 @@ struct
     __uint(max_entries, 4096);
     __type(key, __u16);
     __type(value, __u8);
-} cindersentinel_blocked_tcp_ports SEC(".maps");
+} cs_blk_tcp SEC(".maps");
 
 struct
 {
@@ -41,7 +43,7 @@ struct
     __uint(max_entries, 4096);
     __type(key, __u16);
     __type(value, __u8);
-} cindersentinel_blocked_udp_ports SEC(".maps");
+} cs_blk_udp SEC(".maps");
 
 struct
 {
@@ -49,12 +51,12 @@ struct
     __uint(max_entries, 1);
     __type(key, __u32);
     __type(value, __u8);
-} cindersentinel_block_icmp SEC(".maps");
+} cs_blk_icmp SEC(".maps");
 
 static __always_inline void cindersentinel_increment_counter(enum cindersentinel_counter_key counter_key)
 {
     __u32 key = (__u32)counter_key;
-    __u64 *value = bpf_map_lookup_elem(&cindersentinel_counters, &key);
+    __u64 *value = bpf_map_lookup_elem(&cs_cnt, &key);
     if (value)
     {
         (*value)++;
@@ -64,7 +66,7 @@ static __always_inline void cindersentinel_increment_counter(enum cindersentinel
 static __always_inline bool cindersentinel_is_icmp_blocked()
 {
     __u32 key = 0;
-    __u8 *value = bpf_map_lookup_elem(&cindersentinel_block_icmp, &key);
+    __u8 *value = bpf_map_lookup_elem(&cs_blk_icmp, &key);
     if (!value)
     {
         return false;
@@ -75,14 +77,14 @@ static __always_inline bool cindersentinel_is_icmp_blocked()
 static __always_inline bool cindersentinel_is_tcp_port_blocked(__u16 destination_port_host_order)
 {
     __u16 key = destination_port_host_order;
-    __u8 *value = bpf_map_lookup_elem(&cindersentinel_blocked_tcp_ports, &key);
+    __u8 *value = bpf_map_lookup_elem(&cs_blk_tcp, &key);
     return value && (*value != 0);
 }
 
 static __always_inline bool cindersentinel_is_udp_port_blocked(__u16 destination_port_host_order)
 {
     __u16 key = destination_port_host_order;
-    __u8 *value = bpf_map_lookup_elem(&cindersentinel_blocked_udp_ports, &key);
+    __u8 *value = bpf_map_lookup_elem(&cs_blk_udp, &key);
     return value && (*value != 0);
 }
 

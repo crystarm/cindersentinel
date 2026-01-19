@@ -5,14 +5,14 @@ need_root "$@"
 
 MAP_ID="$(
   bpftool map show | awk '
-    /name cindersentinel_counters/ { id=$1 }
+    /name cs_cnt/ { id=$1 }
     END {
       if (id == "") exit 1;
       sub(":", "", id);
       print id
     }'
 )" || {
-  echo "Cannot find map: cindersentinel_counters"
+  echo "Cannot find map: cs_cnt"
   exit 1
 }
 
