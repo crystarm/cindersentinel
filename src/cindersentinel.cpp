@@ -8,9 +8,36 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include "policy/scheme.h"
+
+static void Die(const std::string& msg);
+
+static std::vector<uint8_t> ReadFileAll(const std::string& path)
+{
+    std::ifstream f(path, std::ios::binary);
+    if (!f) Die("cannot open file: " + path);
+    f.seekg(0, std::ios::end);
+    std::streamoff sz = f.tellg();
+    if (sz < 0) Die("cannot stat file: " + path);
+    if ((uint64_t)sz > (1ull << 20)) Die("policy file too large (>1MiB): " + path);
+    f.seekg(0, std::ios::beg);
+    std::vector<uint8_t> b((size_t)sz);
+    if (sz && !f.read((char*)b.data(), sz)) Die("read failed: " + path);
+    return b;
+}
+
+static void WriteFileAll(const std::string& path, const std::vector<uint8_t>& b)
+{
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) Die("cannot write: " + path);
+    if (!b.empty()) f.write((const char*)b.data(), (std::streamsize)b.size());
+    if (!f) Die("write failed: " + path);
+}
 
 static volatile sig_atomic_t g_stop = 0;
 
@@ -330,6 +357,86 @@ static void CmdEtch(int argc, char** argv)
     close(fd);
 }
 
+static void CmdTry(int argc, char** argv)
+{
+    if (argc < 1) Die("try: missing <policy.cbor>");
+    std::string in_path = argv[0];
+
+    std::string out_path;
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string a = argv[i];
+        if (a == "--out")
+        {
+            if (i + 1 >= argc) Die("try: --out requires path");
+            out_path = argv[++i];
+        }
+        else
+        {
+            Die("try: unknown arg: " + a);
+        }
+    }
+
+    auto bytes = ReadFileAll(in_path);
+
+    std::vector<uint8_t> canon;
+    cs::PolicySummary sum;
+    cs::PolicyError err;
+    if (!cs::PolicyParseValidateCanonical(bytes, canon, sum, err))
+        Die("policy invalid: " + err.msg);
+
+    bool same = (bytes == canon);
+
+    if (!out_path.empty())
+    {
+        WriteFileAll(out_path, canon);
+        std::cout << "OK (canonical written): " << out_path << "\n";
+    }
+
+    if (!same)
+    {
+        if (out_path.empty())
+            Die("policy is valid but not canonical. Re-run with: try <in> --out <out.cbor>");
+        return;
+    }
+
+    std::cout << "OK (canonical)\n";
+    std::cout << cs::PolicyAwareText(sum);
+}
+
+static void CmdInvoke(int argc, char** argv)
+{
+    (void)argc;
+    (void)argv;
+    Die("invoke: not implemented yet (Step 3 will apply canonical policy into eBPF maps)");
+}
+
+static void CmdStepback(int argc, char** argv)
+{
+    (void)argc;
+    (void)argv;
+    Die("stepback: not implemented yet (Step 3 will restore previous policy)");
+}
+
+static void CmdAware(int argc, char** argv)
+{
+    if (argc < 1) Die("aware: missing <policy.cbor>");
+    std::string in_path = argv[0];
+    auto bytes = ReadFileAll(in_path);
+
+    std::vector<uint8_t> canon;
+    cs::PolicySummary sum;
+    cs::PolicyError err;
+    if (!cs::PolicyParseValidateCanonical(bytes, canon, sum, err))
+        Die("policy invalid: " + err.msg);
+
+    bool same = (bytes == canon);
+    if (!same)
+        std::cout << "warning: input is not canonical (use: try <in> --out <out.cbor>)\n";
+
+    std::cout << cs::PolicyAwareText(sum);
+}
+
 static void Usage(const char* argv0)
 {
     std::cerr
@@ -338,7 +445,11 @@ static void Usage(const char* argv0)
         << "  " << argv0 << " etch tcp  forbid|let|show [port]\n"
         << "  " << argv0 << " etch udp  forbid|let|show [port]\n"
         << "  " << argv0 << " aura\n"
-        << "  " << argv0 << " embers [--watch] [--interval-ms N]\n";
+        << "  " << argv0 << " embers [--watch] [--interval-ms N]\n"
+        << "  " << argv0 << " try <policy.cbor> [--out <canonical.cbor>]\n"
+        << "  " << argv0 << " invoke <policy.cbor>\n"
+        << "  " << argv0 << " stepback\n"
+        << "  " << argv0 << " aware <policy.cbor>\n";
 }
 
 int main(int argc, char** argv)
@@ -390,6 +501,42 @@ int main(int argc, char** argv)
             return 2;
         }
         CmdEtch(argc - 2, argv + 2);
+        return 0;
+    }
+
+    if (cmd == "try")
+    {
+        if (argc < 3)
+        {
+            Usage(argv[0]);
+            return 2;
+        }
+        CmdTry(argc - 2, argv + 2);
+        return 0;
+    }
+    if (cmd == "invoke")
+    {
+        if (argc < 3)
+        {
+            Usage(argv[0]);
+            return 2;
+        }
+        CmdInvoke(argc - 2, argv + 2);
+        return 0;
+    }
+    if (cmd == "stepback")
+    {
+        CmdStepback(argc - 2, argv + 2);
+        return 0;
+    }
+    if (cmd == "aware")
+    {
+        if (argc < 3)
+        {
+            Usage(argv[0]);
+            return 2;
+        }
+        CmdAware(argc - 2, argv + 2);
         return 0;
     }
 

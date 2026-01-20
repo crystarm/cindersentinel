@@ -1,13 +1,7 @@
 .gitignore
 
-push
-connect
-
-cs_vm_key
-cs_vm_key.pub
-
-testlogs*/
-testlogs*/*
-
 build*/
-build*/*
+
+vm*/
+
+ideas

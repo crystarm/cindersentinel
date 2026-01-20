@@ -11,8 +11,24 @@ add_executable(cindersentineld
     src/cindersentineld.cpp
 )
 
+target_include_directories(cindersentineld PRIVATE
+    ${LIBBPF_INCLUDE_DIRS}
+)
+
+target_compile_options(cindersentineld PRIVATE
+    ${LIBBPF_CFLAGS_OTHER}
+)
+
+target_link_libraries(cindersentineld PRIVATE
+    ${LIBBPF_LIBRARIES}
+    elf
+    z
+)
+
 add_executable(cindersentinel
     src/cindersentinel.cpp
+    src/policy/cbor.cpp
+    src/policy/scheme.cpp
 )
 
 target_include_directories(cindersentinel PRIVATE
@@ -24,20 +40,6 @@ target_compile_options(cindersentinel PRIVATE
 )
 
 target_link_libraries(cindersentinel PRIVATE
-    ${LIBBPF_LIBRARIES}
-    elf
-    z
-)
-
-target_include_directories(cindersentineld PRIVATE
-    ${LIBBPF_INCLUDE_DIRS}
-)
-
-target_compile_options(cindersentineld PRIVATE
-    ${LIBBPF_CFLAGS_OTHER}
-)
-
-target_link_libraries(cindersentineld PRIVATE
     ${LIBBPF_LIBRARIES}
     elf
     z
