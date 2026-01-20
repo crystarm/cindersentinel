@@ -28,7 +28,7 @@ find_map_id()
   echo "$id"
 }
 
-جمة_u16_le_bytes()
+u16_le_bytes()
 {
   local port="$1"
   local lo=$((port & 255))
