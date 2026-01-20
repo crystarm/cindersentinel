@@ -28,6 +28,7 @@ BPF_CFLAGS=(
 )
 
 HOST_BIN="${BUILD_HOST_DIR}/cindersentineld"
+CLI_BIN="${BUILD_HOST_DIR}/cindersentinel"
 TC_OBJ="${BUILD_BPF_DIR}/cindersentinel_tc.bpf.o"
 XDP_OBJ="${BUILD_BPF_DIR}/cindersentinel_xdp.bpf.o"
 

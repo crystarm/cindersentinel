@@ -17,9 +17,9 @@ Usage:
   ${SCRIPT_DIR}/dev.sh xdp-off          - detach xdp
   ${SCRIPT_DIR}/dev.sh counters         - watch counters map
 
-  ${SCRIPT_DIR}/dev.sh icmp on|off|show
-  ${SCRIPT_DIR}/dev.sh tcp  block|unblock|show <port?>
-  ${SCRIPT_DIR}/dev.sh udp  block|unblock|show <port?>
+    ${SCRIPT_DIR}/dev.sh icmp forbid|let|show
+    ${SCRIPT_DIR}/dev.sh tcp  forbid|let|show <port?>
+    ${SCRIPT_DIR}/dev.sh udp  forbid|let|show <port?>
 
   ${SCRIPT_DIR}/dev.sh clean            - alias for down
 USAGE
@@ -59,11 +59,11 @@ case "${cmd}" in
     ;;
 
   counters)
-    sudo -E "${SCRIPT_DIR}/watch-counters.sh" "$@"
+    sudo -E "${CLI_BIN}" embers --watch --interval-ms 1000
     ;;
 
   icmp|tcp|udp)
-    sudo -E "${SCRIPT_DIR}/rules.sh" "${cmd}" "$@"
+    sudo -E "${CLI_BIN}" etch "${cmd}" "$@"
     ;;
 
   -h|--help|"")
