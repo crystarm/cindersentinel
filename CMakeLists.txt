@@ -4,8 +4,18 @@ project(cindersentinel LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBBPF REQUIRED libbpf)
+find_package(PkgConfig QUIET)
+if (NOT PKG_CONFIG_FOUND)
+  message(FATAL_ERROR "pkg-config not found")
+endif()
+
+pkg_check_modules(LIBBPF QUIET libbpf)
+if (NOT LIBBPF_FOUND)
+  message(FATAL_ERROR "libbpf not found (pkg-config: libbpf)")
+endif()
+
+message(STATUS "Found libbpf, version ${LIBBPF_VERSION}")
+
 
 add_executable(cindersentineld
     src/cindersentineld.cpp

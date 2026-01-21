@@ -94,15 +94,13 @@ static bool ParsePorts(const CborValue& v, std::vector<PortRange>& out, PolicyEr
 static bool MapToU64Index(const CborValue& m, std::vector<std::pair<uint64_t, const CborValue*>>& out, PolicyError& err)
 {
     if (m.t != CborType::MAP) return Fail(err, "expected map");
-    out.clear();
-    out.reserve(m.map.size());
+    if (m.map_keys.size() != m.map_vals.size()) return Fail(err, "map keys/values size mismatch");
 
-    for (const auto& kv : m.map)
-    {
-        uint64_t k = 0;
-        if (!GetU64(kv.first, k)) return Fail(err, "map keys must be uint");
-        out.push_back({k, &kv.second});
-    }
+    out.clear();
+    out.reserve(m.map_keys.size());
+
+    for (size_t i = 0; i < m.map_keys.size(); ++i)
+        out.push_back({m.map_keys[i], &m.map_vals[i]});
 
     std::sort(out.begin(), out.end(), [](auto a, auto b){ return a.first < b.first; });
     for (size_t i = 1; i < out.size(); ++i)
@@ -136,7 +134,7 @@ static bool ValidateRule(const CborValue& rule,
     }
 
     const CborValue* v_action = FindKey(idx, CSR_ACTION);
-    const CborValue* v_proto = FindKey(idx, CSR_PROTO);
+    const CborValue* v_proto  = FindKey(idx, CSR_PROTO);
     const CborValue* v_dports = FindKey(idx, CSR_DPORTS);
 
     if (!v_action || !v_proto) return Fail(err, "rule must contain action and proto");
@@ -151,18 +149,23 @@ static bool ValidateRule(const CborValue& rule,
     if (proto != CSP_ICMP && proto != CSP_TCP && proto != CSP_UDP)
         return Fail(err, "unknown proto");
 
-    // Normalize rule
-    std::vector<std::pair<CborValue, CborValue>> out_map;
-    out_map.reserve(3);
-    out_map.push_back({CborValue::UInt(CSR_ACTION), CborValue::UInt(action)});
-    out_map.push_back({CborValue::UInt(CSR_PROTO), CborValue::UInt(proto)});
+    std::vector<uint64_t> out_keys;
+    std::vector<CborValue> out_vals;
+    out_keys.reserve(3);
+    out_vals.reserve(3);
+
+    out_keys.push_back(CSR_ACTION);
+    out_vals.push_back(CborValue::UInt(action));
+
+    out_keys.push_back(CSR_PROTO);
+    out_vals.push_back(CborValue::UInt(proto));
 
     if (proto == CSP_ICMP)
     {
         if (v_dports && !(v_dports->t == CborType::ARRAY && v_dports->arr.empty()))
             return Fail(err, "icmp rule must not have dports");
         icmp_forbid = true;
-        out_rule_norm = CborValue::Map(std::move(out_map));
+        out_rule_norm = CborValue::Map(std::move(out_keys), std::move(out_vals));
         return true;
     }
 
@@ -184,8 +187,11 @@ static bool ValidateRule(const CborValue& rule,
         pair.push_back(CborValue::UInt(r.hi));
         dps.push_back(CborValue::Array(std::move(pair)));
     }
-    out_map.push_back({CborValue::UInt(CSR_DPORTS), CborValue::Array(std::move(dps))});
-    out_rule_norm = CborValue::Map(std::move(out_map));
+
+    out_keys.push_back(CSR_DPORTS);
+    out_vals.push_back(CborValue::Array(std::move(dps)));
+
+    out_rule_norm = CborValue::Map(std::move(out_keys), std::move(out_vals));
     return true;
 }
 
@@ -220,9 +226,9 @@ bool PolicyParseValidateCanonical(const std::vector<uint8_t>& in,
             return Fail(err, "unknown root field");
     }
 
-    const CborValue* v_kind = FindKey(idx, CSK_KIND);
-    const CborValue* v_v = FindKey(idx, CSK_V);
-    const CborValue* v_def = FindKey(idx, CSK_DEFAULT_ACTION);
+    const CborValue* v_kind  = FindKey(idx, CSK_KIND);
+    const CborValue* v_v     = FindKey(idx, CSK_V);
+    const CborValue* v_def   = FindKey(idx, CSK_DEFAULT_ACTION);
     const CborValue* v_rules = FindKey(idx, CSK_RULES);
 
     if (!v_kind || !v_v || !v_rules) return Fail(err, "missing required root fields");
@@ -264,15 +270,27 @@ bool PolicyParseValidateCanonical(const std::vector<uint8_t>& in,
     sum.udp_forbid = udp;
     sum.rule_count = v_rules->arr.size();
 
-    std::vector<std::pair<CborValue, CborValue>> root_norm;
-    root_norm.reserve(4);
-    root_norm.push_back({CborValue::UInt(CSK_KIND), CborValue::Text(sum.kind)});
-    root_norm.push_back({CborValue::UInt(CSK_V), CborValue::UInt(sum.v)});
-    if (v_def)
-        root_norm.push_back({CborValue::UInt(CSK_DEFAULT_ACTION), CborValue::UInt(CSA_LET)});
-    root_norm.push_back({CborValue::UInt(CSK_RULES), CborValue::Array(std::move(rules_norm))});
+    std::vector<uint64_t> root_keys;
+    std::vector<CborValue> root_vals;
+    root_keys.reserve(4);
+    root_vals.reserve(4);
 
-    CborValue policy_norm = CborValue::Map(std::move(root_norm));
+    root_keys.push_back(CSK_KIND);
+    root_vals.push_back(CborValue::Text(sum.kind));
+
+    root_keys.push_back(CSK_V);
+    root_vals.push_back(CborValue::UInt(sum.v));
+
+    if (v_def)
+    {
+        root_keys.push_back(CSK_DEFAULT_ACTION);
+        root_vals.push_back(CborValue::UInt(CSA_LET));
+    }
+
+    root_keys.push_back(CSK_RULES);
+    root_vals.push_back(CborValue::Array(std::move(rules_norm)));
+
+    CborValue policy_norm = CborValue::Map(std::move(root_keys), std::move(root_vals));
 
     out_canon.clear();
     CborError e2;

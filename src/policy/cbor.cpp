@@ -137,16 +137,23 @@ static bool DecodeAny(const uint8_t*& p, const uint8_t* end,
         if (!ReadLen(p, end, add, n, err)) return false;
         if (n > (uint64_t)lim.max_items) return Fail(err, "map too large");
 
-        std::vector<std::pair<CborValue, CborValue>> m;
-        m.reserve((size_t)n);
+        std::vector<uint64_t> ks;
+        std::vector<CborValue> vs;
+        ks.reserve((size_t)n);
+        vs.reserve((size_t)n);
+
         for (uint64_t i = 0; i < n; ++i)
         {
             CborValue k, v;
             if (!DecodeAny(p, end, k, lim, items, depth + 1, err)) return false;
             if (!DecodeAny(p, end, v, lim, items, depth + 1, err)) return false;
-            m.push_back({std::move(k), std::move(v)});
+
+            if (k.t != CborType::UINT) return Fail(err, "map key must be UINT");
+            ks.push_back(k.u);
+            vs.push_back(std::move(v));
         }
-        out = CborValue::Map(std::move(m));
+
+        out = CborValue::Map(std::move(ks), std::move(vs));
         return true;
     }
 
@@ -222,18 +229,18 @@ static bool EncodeAnyCanonical(const CborValue& v, std::vector<uint8_t>& out, Cb
 
 static bool EncodeMapCanonical(const CborValue& v, std::vector<uint8_t>& out, CborError& err)
 {
+    if (v.map_keys.size() != v.map_vals.size())
+        return Fail(err, "map keys/values size mismatch");
+
     std::vector<std::pair<uint64_t, size_t>> order;
-    order.reserve(v.map.size());
+    order.reserve(v.map_keys.size());
 
     std::unordered_set<uint64_t> seen;
-    seen.reserve(v.map.size() * 2 + 1);
+    seen.reserve(v.map_keys.size() * 2 + 1);
 
-    for (size_t i = 0; i < v.map.size(); ++i)
+    for (size_t i = 0; i < v.map_keys.size(); ++i)
     {
-        const auto& kv = v.map[i];
-        if (kv.first.t != CborType::UINT)
-            return Fail(err, "map key must be UINT for canonical encoding");
-        uint64_t k = kv.first.u;
+        uint64_t k = v.map_keys[i];
         if (seen.find(k) != seen.end()) return Fail(err, "duplicate map key");
         seen.insert(k);
         order.push_back({k, i});
@@ -241,11 +248,11 @@ static bool EncodeMapCanonical(const CborValue& v, std::vector<uint8_t>& out, Cb
 
     std::sort(order.begin(), order.end(), [](const auto& a, const auto& b){ return a.first < b.first; });
 
-    EncodeU64Head(5, (uint64_t)v.map.size(), out);
+    EncodeU64Head(5, (uint64_t)v.map_keys.size(), out);
     for (auto [k, idx] : order)
     {
-        if (!EncodeAnyCanonical(v.map[idx].first, out, err)) return false;
-        if (!EncodeAnyCanonical(v.map[idx].second, out, err)) return false;
+        EncodeU64Head(0, k, out);
+        if (!EncodeAnyCanonical(v.map_vals[idx], out, err)) return false;
     }
     return true;
 }
@@ -339,17 +346,16 @@ static void PrettyAny(const CborValue& v, std::ostringstream& oss, int indent)
         case CborType::MAP:
         {
             oss << "{";
-            if (!v.map.empty()) oss << "\n";
-            for (size_t i = 0; i < v.map.size(); ++i)
+            if (!v.map_keys.empty()) oss << "\n";
+            for (size_t i = 0; i < v.map_keys.size(); ++i)
             {
                 Indent(oss, indent + 2);
-                PrettyAny(v.map[i].first, oss, indent + 2);
-                oss << ": ";
-                PrettyAny(v.map[i].second, oss, indent + 2);
-                if (i + 1 < v.map.size()) oss << ",";
+                oss << v.map_keys[i] << ": ";
+                PrettyAny(v.map_vals[i], oss, indent + 2);
+                if (i + 1 < v.map_keys.size()) oss << ",";
                 oss << "\n";
             }
-            if (!v.map.empty()) Indent(oss, indent);
+            if (!v.map_keys.empty()) Indent(oss, indent);
             oss << "}";
             return;
         }

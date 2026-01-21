@@ -11,6 +11,16 @@ want_cc="$(resolve_bin "${HOST_CC}")"
 want_cxx="$(resolve_bin "${HOST_CXX}")"
 want_bpf_clang="$(resolve_bin "${BPF_CLANG}")"
 
+ver1()
+{
+  "$1" --version 2>/dev/null | head -n 1
+}
+
+printf "  %-10s :  %-20s |  %s\n" "CC"        "$want_cc"        "$(ver1 "$want_cc")"
+printf "  %-10s :  %-20s |  %s\n" "CXX"       "$want_cxx"       "$(ver1 "$want_cxx")"
+printf "  %-10s :  %-20s |  %s\n" "BPF clang" "$want_bpf_clang" "$(ver1 "$want_bpf_clang")"
+
+
 if [[ -z "${want_cc}" || -z "${want_cxx}" ]]; then
   echo "Missing compiler(s): HOST_CC='${HOST_CC}' -> '${want_cc:-<not found>}', HOST_CXX='${HOST_CXX}' -> '${want_cxx:-<not found>}'" >&2
   exit 1

@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace cs
@@ -35,7 +34,8 @@ struct CborValue
     std::vector<uint8_t> bytes;
     std::string text;
     std::vector<CborValue> arr;
-    std::vector<std::pair<CborValue, CborValue>> map;
+    std::vector<uint64_t> map_keys;
+    std::vector<CborValue> map_vals;
 
     static CborValue UInt(uint64_t v)
     {
@@ -92,11 +92,12 @@ struct CborValue
         return x;
     }
 
-    static CborValue Map(std::vector<std::pair<CborValue, CborValue>> v)
+    static CborValue Map(std::vector<uint64_t> ks, std::vector<CborValue> vs)
     {
         CborValue x;
         x.t = CborType::MAP;
-        x.map = std::move(v);
+        x.map_keys = std::move(ks);
+        x.map_vals = std::move(vs);
         return x;
     }
 };
