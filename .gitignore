@@ -2,3 +2,6 @@
 build*/
 
 .x
+
+*.cbor
+*.cbor.tmp
