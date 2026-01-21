@@ -6,46 +6,54 @@
 #include <algorithm>
 #include <cstddef>
 #include <sstream>
+#include <utility>
 
 namespace cs
 {
 
-static bool Fail(PolicyError& err, const std::string& msg)
+static bool fail(policy_error &err, const std::string &msg)
 {
     err.msg = msg;
     return false;
 }
 
-static bool GetU64(const CborValue& v, uint64_t& out)
+static bool get_u64(const cbor_value &v, uint64_t &out)
 {
-    if (v.t != CborType::UINT) return false;
+    if (v.t != cbor_type::UINT) return false;
     out = v.u;
     return true;
 }
 
-static bool GetText(const CborValue& v, std::string& out)
+static bool get_text(const cbor_value &v, std::string &out)
 {
-    if (v.t != CborType::TEXT) return false;
+    if (v.t != cbor_type::TEXT) return false;
     out = v.text;
     return true;
 }
 
-static void NormalizeRanges(std::vector<PortRange>& rs)
+static void normalize_ranges(std::vector<port_range> &rs)
 {
-    std::sort(rs.begin(), rs.end(), [](const PortRange& a, const PortRange& b)
+    std::sort(rs.begin(), rs.end(), [](const port_range &a, const port_range &b)
     {
         if (a.lo != b.lo) return a.lo < b.lo;
         return a.hi < b.hi;
     });
 
-    std::vector<PortRange> out;
+    std::vector<port_range> out;
     out.reserve(rs.size());
 
     for (auto r : rs)
     {
-        if (out.empty()) { out.push_back(r); continue; }
-        auto& last = out.back();
-        if (r.lo <= (uint16_t)(last.hi + 1))
+        if (out.empty())
+        {
+            out.push_back(r);
+            continue;
+        }
+
+        auto &last = out.back();
+        uint32_t last_hi = last.hi;
+
+        if ((uint32_t)r.lo <= last_hi + 1u)
         {
             if (r.hi > last.hi) last.hi = r.hi;
         }
@@ -58,249 +66,274 @@ static void NormalizeRanges(std::vector<PortRange>& rs)
     rs.swap(out);
 }
 
-static bool ParsePorts(const CborValue& v, std::vector<PortRange>& out, PolicyError& err)
+static bool parse_ports(const cbor_value &v, std::vector<port_range> &out, policy_error &err)
 {
-    if (v.t != CborType::ARRAY) return Fail(err, "dports must be array");
-    if (v.arr.empty()) return Fail(err, "dports must be non-empty");
+    if (v.t != cbor_type::ARRAY) return fail(err, "dports must be array");
+    if (v.arr.empty()) return fail(err, "dports must be non-empty");
 
-    for (const auto& item : v.arr)
+    for (const auto &item : v.arr)
     {
-        if (item.t == CborType::UINT)
+        if (item.t == cbor_type::UINT)
         {
-            if (item.u < 1 || item.u > 65535) return Fail(err, "port out of range");
-            out.push_back(PortRange{(uint16_t)item.u, (uint16_t)item.u});
+            if (item.u < 1 || item.u > 65535) return fail(err, "port out of range");
+            out.push_back(port_range{(uint16_t)item.u, (uint16_t)item.u});
             continue;
         }
 
-        if (item.t == CborType::ARRAY)
+        if (item.t == cbor_type::ARRAY)
         {
-            if (item.arr.size() != 2) return Fail(err, "port range must be [lo, hi]");
+            if (item.arr.size() != 2) return fail(err, "port range must be [lo, hi]");
             uint64_t lo = 0, hi = 0;
-            if (!GetU64(item.arr[0], lo) || !GetU64(item.arr[1], hi))
-                return Fail(err, "port range bounds must be uint");
+            if (!get_u64(item.arr[0], lo) || !get_u64(item.arr[1], hi))
+            {
+                return fail(err, "port range bounds must be uint");
+            }
             if (lo < 1 || lo > 65535 || hi < 1 || hi > 65535 || lo > hi)
-                return Fail(err, "bad port range");
-            out.push_back(PortRange{(uint16_t)lo, (uint16_t)hi});
+            {
+                return fail(err, "bad port range");
+            }
+            out.push_back(port_range{(uint16_t)lo, (uint16_t)hi});
             continue;
         }
 
-        return Fail(err, "dports elements must be uint or [lo,hi]");
+        return fail(err, "dports elements must be uint or [lo,hi]");
     }
 
-    NormalizeRanges(out);
+    normalize_ranges(out);
     return true;
 }
 
-static bool MapToU64Index(const CborValue& m, std::vector<std::pair<uint64_t, const CborValue*>>& out, PolicyError& err)
+static bool map_to_u64_index(const cbor_value &m,
+                             std::vector<std::pair<uint64_t, const cbor_value *>> &out,
+                             policy_error &err)
 {
-    if (m.t != CborType::MAP) return Fail(err, "expected map");
-    if (m.map_keys.size() != m.map_vals.size()) return Fail(err, "map keys/values size mismatch");
+    if (m.t != cbor_type::MAP) return fail(err, "expected map");
+    if (m.map_keys.size() != m.map_vals.size()) return fail(err, "map keys/values size mismatch");
 
     out.clear();
     out.reserve(m.map_keys.size());
 
     for (size_t i = 0; i < m.map_keys.size(); ++i)
+    {
         out.push_back({m.map_keys[i], &m.map_vals[i]});
+    }
 
     std::sort(out.begin(), out.end(), [](auto a, auto b){ return a.first < b.first; });
     for (size_t i = 1; i < out.size(); ++i)
-        if (out[i-1].first == out[i].first) return Fail(err, "duplicate map keys");
+    {
+        if (out[i - 1].first == out[i].first) return fail(err, "duplicate map keys");
+    }
+
     return true;
 }
 
-static const CborValue* FindKey(const std::vector<std::pair<uint64_t, const CborValue*>>& idx, uint64_t k)
+static const cbor_value *find_key(const std::vector<std::pair<uint64_t, const cbor_value *>> &idx, uint64_t k)
 {
     auto it = std::lower_bound(idx.begin(), idx.end(), k,
-                               [](const auto& a, uint64_t b){ return a.first < b; });
+                               [](const auto &a, uint64_t b){ return a.first < b; });
     if (it == idx.end() || it->first != k) return nullptr;
     return it->second;
 }
 
-static bool ValidateRule(const CborValue& rule,
-                         bool& icmp_forbid,
-                         std::vector<PortRange>& tcp,
-                         std::vector<PortRange>& udp,
-                         CborValue& out_rule_norm,
-                         PolicyError& err)
+static bool validate_rule(const cbor_value &rule,
+                          bool &icmp_forbid,
+                          std::vector<port_range> &tcp,
+                          std::vector<port_range> &udp,
+                          cbor_value &out_rule_norm,
+                          policy_error &err)
 {
-    std::vector<std::pair<uint64_t, const CborValue*>> idx;
-    if (!MapToU64Index(rule, idx, err)) return false;
+    std::vector<std::pair<uint64_t, const cbor_value *>> idx;
+    if (!map_to_u64_index(rule, idx, err)) return false;
 
-    for (auto& kv : idx)
+    for (auto &kv : idx)
     {
         uint64_t k = kv.first;
         if (k != CSR_ACTION && k != CSR_PROTO && k != CSR_DPORTS)
-            return Fail(err, "unknown rule field");
+        {
+            return fail(err, "unknown rule field");
+        }
     }
 
-    const CborValue* v_action = FindKey(idx, CSR_ACTION);
-    const CborValue* v_proto  = FindKey(idx, CSR_PROTO);
-    const CborValue* v_dports = FindKey(idx, CSR_DPORTS);
+    const cbor_value *v_action = find_key(idx, CSR_ACTION);
+    const cbor_value *v_proto  = find_key(idx, CSR_PROTO);
+    const cbor_value *v_dports = find_key(idx, CSR_DPORTS);
 
-    if (!v_action || !v_proto) return Fail(err, "rule must contain action and proto");
+    if (!v_action || !v_proto) return fail(err, "rule must contain action and proto");
 
     uint64_t action = 0, proto = 0;
-    if (!GetU64(*v_action, action)) return Fail(err, "action must be uint");
-    if (!GetU64(*v_proto, proto)) return Fail(err, "proto must be uint");
+    if (!get_u64(*v_action, action)) return fail(err, "action must be uint");
+    if (!get_u64(*v_proto, proto)) return fail(err, "proto must be uint");
 
-    if (action == CSA_LET) return Fail(err, "'let' in rules is unsupported for now");
-    if (action != CSA_FORBID) return Fail(err, "unknown action");
+    if (action == CSA_LET) return fail(err, "'let' in rules is unsupported for now");
+    if (action != CSA_FORBID) return fail(err, "unknown action");
 
     if (proto != CSP_ICMP && proto != CSP_TCP && proto != CSP_UDP)
-        return Fail(err, "unknown proto");
+    {
+        return fail(err, "unknown proto");
+    }
 
     std::vector<uint64_t> out_keys;
-    std::vector<CborValue> out_vals;
+    std::vector<cbor_value> out_vals;
     out_keys.reserve(3);
     out_vals.reserve(3);
 
     out_keys.push_back(CSR_ACTION);
-    out_vals.push_back(CborValue::UInt(action));
+    out_vals.push_back(cbor_value::make_uint(action));
 
     out_keys.push_back(CSR_PROTO);
-    out_vals.push_back(CborValue::UInt(proto));
+    out_vals.push_back(cbor_value::make_uint(proto));
 
     if (proto == CSP_ICMP)
     {
-        if (v_dports && !(v_dports->t == CborType::ARRAY && v_dports->arr.empty()))
-            return Fail(err, "icmp rule must not have dports");
+        if (v_dports && !(v_dports->t == cbor_type::ARRAY && v_dports->arr.empty()))
+        {
+            return fail(err, "icmp rule must not have dports");
+        }
+
         icmp_forbid = true;
-        out_rule_norm = CborValue::Map(std::move(out_keys), std::move(out_vals));
+        out_rule_norm = cbor_value::make_map(std::move(out_keys), std::move(out_vals));
         return true;
     }
 
-    if (!v_dports) return Fail(err, "tcp/udp rule must have dports");
+    if (!v_dports) return fail(err, "tcp/udp rule must have dports");
 
-    std::vector<PortRange> rs;
-    if (!ParsePorts(*v_dports, rs, err)) return false;
+    std::vector<port_range> rs;
+    if (!parse_ports(*v_dports, rs, err)) return false;
 
     if (proto == CSP_TCP) tcp.insert(tcp.end(), rs.begin(), rs.end());
     else udp.insert(udp.end(), rs.begin(), rs.end());
 
-    std::vector<CborValue> dps;
+    std::vector<cbor_value> dps;
     dps.reserve(rs.size());
     for (auto r : rs)
     {
-        std::vector<CborValue> pair;
+        std::vector<cbor_value> pair;
         pair.reserve(2);
-        pair.push_back(CborValue::UInt(r.lo));
-        pair.push_back(CborValue::UInt(r.hi));
-        dps.push_back(CborValue::Array(std::move(pair)));
+        pair.push_back(cbor_value::make_uint(r.lo));
+        pair.push_back(cbor_value::make_uint(r.hi));
+        dps.push_back(cbor_value::make_array(std::move(pair)));
     }
 
     out_keys.push_back(CSR_DPORTS);
-    out_vals.push_back(CborValue::Array(std::move(dps)));
+    out_vals.push_back(cbor_value::make_array(std::move(dps)));
 
-    out_rule_norm = CborValue::Map(std::move(out_keys), std::move(out_vals));
+    out_rule_norm = cbor_value::make_map(std::move(out_keys), std::move(out_vals));
     return true;
 }
 
-bool PolicyParseValidateCanonical(const std::vector<uint8_t>& in,
-                                  std::vector<uint8_t>& out_canon,
-                                  PolicySummary& sum,
-                                  PolicyError& err)
+bool policy_parse_validate_canonical(const std::vector<uint8_t> &in,
+                                     std::vector<uint8_t> &out_canon,
+                                     policy_summary &sum,
+                                     policy_error &err)
 {
-    sum = PolicySummary{};
+    sum = policy_summary{};
 
-    CborDecodeLimits lim;
+    cbor_decode_limits lim;
     lim.max_bytes = 1u << 20;
     lim.max_items = 1u << 18;
     lim.max_depth = 64;
 
-    CborValue root;
+    cbor_value root;
     size_t used = 0;
-    CborError cerr;
-    if (!CborDecodeStrict(in.data(), in.size(), root, used, lim, cerr))
-        return Fail(err, "CBOR decode error: " + cerr.msg);
-    if (used != in.size()) return Fail(err, "trailing bytes after top-level CBOR value");
+    cbor_error cerr;
 
-    if (root.t != CborType::MAP) return Fail(err, "policy root must be map");
+    if (!cbor_decode_strict(in.data(), in.size(), root, used, lim, cerr))
+    {
+        return fail(err, "CBOR decode error: " + cerr.msg);
+    }
+    if (used != in.size()) return fail(err, "trailing bytes after top-level CBOR value");
 
-    std::vector<std::pair<uint64_t, const CborValue*>> idx;
-    if (!MapToU64Index(root, idx, err)) return false;
+    if (root.t != cbor_type::MAP) return fail(err, "policy root must be map");
 
-    for (auto& kv : idx)
+    std::vector<std::pair<uint64_t, const cbor_value *>> idx;
+    if (!map_to_u64_index(root, idx, err)) return false;
+
+    for (auto &kv : idx)
     {
         uint64_t k = kv.first;
         if (k != CSK_KIND && k != CSK_V && k != CSK_DEFAULT_ACTION && k != CSK_RULES)
-            return Fail(err, "unknown root field");
+        {
+            return fail(err, "unknown root field");
+        }
     }
 
-    const CborValue* v_kind  = FindKey(idx, CSK_KIND);
-    const CborValue* v_v     = FindKey(idx, CSK_V);
-    const CborValue* v_def   = FindKey(idx, CSK_DEFAULT_ACTION);
-    const CborValue* v_rules = FindKey(idx, CSK_RULES);
+    const cbor_value *v_kind  = find_key(idx, CSK_KIND);
+    const cbor_value *v_v     = find_key(idx, CSK_V);
+    const cbor_value *v_def   = find_key(idx, CSK_DEFAULT_ACTION);
+    const cbor_value *v_rules = find_key(idx, CSK_RULES);
 
-    if (!v_kind || !v_v || !v_rules) return Fail(err, "missing required root fields");
+    if (!v_kind || !v_v || !v_rules) return fail(err, "missing required root fields");
 
-    if (!GetText(*v_kind, sum.kind)) return Fail(err, "kind must be text");
-    if (sum.kind != "cindersentinel.policy") return Fail(err, "unexpected kind");
+    if (!get_text(*v_kind, sum.kind)) return fail(err, "kind must be text");
+    if (sum.kind != "cindersentinel.policy") return fail(err, "unexpected kind");
 
-    if (!GetU64(*v_v, sum.v)) return Fail(err, "v must be uint");
-    if (sum.v != 1) return Fail(err, "unsupported policy version");
+    if (!get_u64(*v_v, sum.v)) return fail(err, "v must be uint");
+    if (sum.v != 1) return fail(err, "unsupported policy version");
 
     if (v_def)
     {
         uint64_t def = 0;
-        if (!GetU64(*v_def, def)) return Fail(err, "default_action must be uint");
-        if (def != CSA_LET) return Fail(err, "default_action forbid unsupported for now");
+        if (!get_u64(*v_def, def)) return fail(err, "default_action must be uint");
+        if (def != CSA_LET) return fail(err, "default_action forbid unsupported for now");
     }
 
-    if (v_rules->t != CborType::ARRAY) return Fail(err, "rules must be array");
-    if (v_rules->arr.size() > 4096) return Fail(err, "too many rules");
+    if (v_rules->t != cbor_type::ARRAY) return fail(err, "rules must be array");
+    if (v_rules->arr.size() > 4096) return fail(err, "too many rules");
 
     bool icmp_forbid = false;
-    std::vector<PortRange> tcp;
-    std::vector<PortRange> udp;
+    std::vector<port_range> tcp;
+    std::vector<port_range> udp;
 
-    std::vector<CborValue> rules_norm;
+    std::vector<cbor_value> rules_norm;
     rules_norm.reserve(v_rules->arr.size());
 
-    for (const auto& rule : v_rules->arr)
+    for (const auto &rule : v_rules->arr)
     {
-        CborValue norm;
-        if (!ValidateRule(rule, icmp_forbid, tcp, udp, norm, err)) return false;
+        cbor_value norm;
+        if (!validate_rule(rule, icmp_forbid, tcp, udp, norm, err)) return false;
         rules_norm.push_back(std::move(norm));
     }
 
     sum.icmp_forbid = icmp_forbid;
-    NormalizeRanges(tcp);
-    NormalizeRanges(udp);
+    normalize_ranges(tcp);
+    normalize_ranges(udp);
     sum.tcp_forbid = tcp;
     sum.udp_forbid = udp;
     sum.rule_count = v_rules->arr.size();
 
     std::vector<uint64_t> root_keys;
-    std::vector<CborValue> root_vals;
+    std::vector<cbor_value> root_vals;
     root_keys.reserve(4);
     root_vals.reserve(4);
 
     root_keys.push_back(CSK_KIND);
-    root_vals.push_back(CborValue::Text(sum.kind));
+    root_vals.push_back(cbor_value::make_text(sum.kind));
 
     root_keys.push_back(CSK_V);
-    root_vals.push_back(CborValue::UInt(sum.v));
+    root_vals.push_back(cbor_value::make_uint(sum.v));
 
     if (v_def)
     {
         root_keys.push_back(CSK_DEFAULT_ACTION);
-        root_vals.push_back(CborValue::UInt(CSA_LET));
+        root_vals.push_back(cbor_value::make_uint(CSA_LET));
     }
 
     root_keys.push_back(CSK_RULES);
-    root_vals.push_back(CborValue::Array(std::move(rules_norm)));
+    root_vals.push_back(cbor_value::make_array(std::move(rules_norm)));
 
-    CborValue policy_norm = CborValue::Map(std::move(root_keys), std::move(root_vals));
+    cbor_value policy_norm = cbor_value::make_map(std::move(root_keys), std::move(root_vals));
 
     out_canon.clear();
-    CborError e2;
-    if (!CborEncodeCanonical(policy_norm, out_canon, e2))
-        return Fail(err, "CBOR canonical encode error: " + e2.msg);
+    cbor_error e2;
+    if (!cbor_encode_canonical(policy_norm, out_canon, e2))
+    {
+        return fail(err, "CBOR canonical encode error: " + e2.msg);
+    }
 
     return true;
 }
 
-static std::string RangesToText(const std::vector<PortRange>& rs)
+static std::string ranges_to_text(const std::vector<port_range> &rs)
 {
     if (rs.empty()) return "none";
     std::ostringstream oss;
@@ -313,15 +346,15 @@ static std::string RangesToText(const std::vector<PortRange>& rs)
     return oss.str();
 }
 
-std::string PolicyAwareText(const PolicySummary& sum)
+std::string policy_aware_text(const policy_summary &sum)
 {
     std::ostringstream oss;
     oss << "kind: " << sum.kind << "\n";
     oss << "v: " << sum.v << "\n";
     oss << "rules: " << sum.rule_count << "\n";
     oss << "icmp: " << (sum.icmp_forbid ? "forbid" : "let") << "\n";
-    oss << "tcp_forbidden: " << RangesToText(sum.tcp_forbid) << "\n";
-    oss << "udp_forbidden: " << RangesToText(sum.udp_forbid) << "\n";
+    oss << "tcp_forbidden: " << ranges_to_text(sum.tcp_forbid) << "\n";
+    oss << "udp_forbidden: " << ranges_to_text(sum.udp_forbid) << "\n";
     return oss.str();
 }
 

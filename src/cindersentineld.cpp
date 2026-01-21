@@ -7,7 +7,10 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -15,26 +18,29 @@
 
 static volatile sig_atomic_t g_should_exit = 0;
 
-static void HandleSignal(int)
+static void handle_signal(int)
 {
     g_should_exit = 1;
 }
 
-static int SetMemlockUnlimited()
+static int set_memlock_unlimited()
 {
-    rlimit limit;
+    struct rlimit limit;
     limit.rlim_cur = RLIM_INFINITY;
     limit.rlim_max = RLIM_INFINITY;
     return setrlimit(RLIMIT_MEMLOCK, &limit);
 }
 
-static int LibbpfPrint(enum libbpf_print_level level, const char *format, va_list args)
+static int libbpf_print(enum libbpf_print_level level, const char *format, va_list args)
 {
-    if (level == LIBBPF_DEBUG) return 0;
+    if (level == LIBBPF_DEBUG)
+    {
+        return 0;
+    }
     return vfprintf(stderr, format, args);
 }
 
-struct Options
+struct options
 {
     std::string interface_name;
     std::string object_path = "build/cindersentinel_tc.bpf.o";
@@ -44,7 +50,7 @@ struct Options
     bool print_once = false;
 };
 
-static void PrintUsage(const char *argv0)
+static void print_usage(const char *argv0)
 {
     std::cerr
         << "Usage:\n"
@@ -52,17 +58,23 @@ static void PrintUsage(const char *argv0)
         << "  " << argv0 << " --iface <ifname> [--obj <path>] [--sec <section>] --detach\n";
 }
 
-static bool ParseInt(const char *s, int &out)
+static bool parse_int(const char *s, int &out)
 {
     char *end = nullptr;
     long v = strtol(s, &end, 10);
-    if (!s[0] || (end && *end)) return false;
-    if (v < 0 || v > 3600 * 1000) return false;
+    if (!s[0] || (end && *end))
+    {
+        return false;
+    }
+    if (v < 0 || v > 3600 * 1000)
+    {
+        return false;
+    }
     out = (int)v;
     return true;
 }
 
-static bool ParseArgs(int argc, char **argv, Options &options)
+static bool parse_args(int argc, char **argv, options &opts)
 {
     for (int i = 1; i < argc; ++i)
     {
@@ -81,26 +93,38 @@ static bool ParseArgs(int argc, char **argv, Options &options)
         if (a == "--iface")
         {
             const char *v = need_value("--iface");
-            if (!v) return false;
-            options.interface_name = v;
+            if (!v)
+            {
+                return false;
+            }
+            opts.interface_name = v;
         }
         else if (a == "--obj")
         {
             const char *v = need_value("--obj");
-            if (!v) return false;
-            options.object_path = v;
+            if (!v)
+            {
+                return false;
+            }
+            opts.object_path = v;
         }
         else if (a == "--sec")
         {
             const char *v = need_value("--sec");
-            if (!v) return false;
-            options.section_name = v;
+            if (!v)
+            {
+                return false;
+            }
+            opts.section_name = v;
         }
         else if (a == "--interval-ms")
         {
             const char *v = need_value("--interval-ms");
-            if (!v) return false;
-            if (!ParseInt(v, options.interval_ms))
+            if (!v)
+            {
+                return false;
+            }
+            if (!parse_int(v, opts.interval_ms))
             {
                 std::cerr << "Bad --interval-ms value\n";
                 return false;
@@ -108,15 +132,15 @@ static bool ParseArgs(int argc, char **argv, Options &options)
         }
         else if (a == "--detach")
         {
-            options.detach_only = true;
+            opts.detach_only = true;
         }
         else if (a == "--once")
         {
-            options.print_once = true;
+            opts.print_once = true;
         }
         else if (a == "-h" || a == "--help")
         {
-            PrintUsage(argv[0]);
+            print_usage(argv[0]);
             exit(0);
         }
         else
@@ -126,7 +150,7 @@ static bool ParseArgs(int argc, char **argv, Options &options)
         }
     }
 
-    if (options.interface_name.empty())
+    if (opts.interface_name.empty())
     {
         std::cerr << "--iface is required\n";
         return false;
@@ -135,7 +159,7 @@ static bool ParseArgs(int argc, char **argv, Options &options)
     return true;
 }
 
-static uint64_t ReadPerCpuCounterSum(int map_fd, uint32_t key)
+static uint64_t read_percpu_counter_sum(int map_fd, uint32_t key)
 {
     int cpu_count = libbpf_num_possible_cpus();
     if (cpu_count <= 0)
@@ -160,33 +184,33 @@ static uint64_t ReadPerCpuCounterSum(int map_fd, uint32_t key)
 
 int main(int argc, char **argv)
 {
-    Options options;
-    if (!ParseArgs(argc, argv, options))
+    options opts;
+    if (!parse_args(argc, argv, opts))
     {
-        PrintUsage(argv[0]);
+        print_usage(argv[0]);
         return 2;
     }
 
-    libbpf_set_print(LibbpfPrint);
+    libbpf_set_print(libbpf_print);
     libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 
-    if (SetMemlockUnlimited() != 0)
+    if (set_memlock_unlimited() != 0)
     {
         std::cerr << "setrlimit(RLIMIT_MEMLOCK) failed: " << strerror(errno) << "\n";
         return 1;
     }
 
-    unsigned int ifindex = if_nametoindex(options.interface_name.c_str());
+    unsigned int ifindex = if_nametoindex(opts.interface_name.c_str());
     if (ifindex == 0)
     {
-        std::cerr << "Unknown interface: " << options.interface_name << "\n";
+        std::cerr << "Unknown interface: " << opts.interface_name << "\n";
         return 1;
     }
 
-    signal(SIGINT, HandleSignal);
-    signal(SIGTERM, HandleSignal);
-    struct bpf_tc_hook hook = {};
+    signal(SIGINT, handle_signal);
+    signal(SIGTERM, handle_signal);
 
+    struct bpf_tc_hook hook = {};
     hook.sz = sizeof(hook);
     hook.ifindex = (int)ifindex;
     hook.attach_point = BPF_TC_INGRESS;
@@ -194,7 +218,6 @@ int main(int argc, char **argv)
     bpf_tc_hook_destroy(&hook);
 
     int rc = bpf_tc_hook_create(&hook);
-
     if (rc != 0 && rc != -EEXIST)
     {
         std::cerr << "bpf_tc_hook_create failed: " << rc << "\n";
@@ -206,7 +229,7 @@ int main(int argc, char **argv)
     tc_opts.handle = 1;
     tc_opts.priority = 1;
 
-    if (options.detach_only)
+    if (opts.detach_only)
     {
         rc = bpf_tc_detach(&hook, &tc_opts);
         if (rc != 0)
@@ -214,18 +237,17 @@ int main(int argc, char **argv)
             std::cerr << "bpf_tc_detach failed: " << rc << "\n";
             return 1;
         }
-        std::cout << "Detached from " << options.interface_name << "\n";
+        std::cout << "Detached from " << opts.interface_name << "\n";
         return 0;
     }
 
-    bpf_object *object = bpf_object__open_file(options.object_path.c_str(), nullptr);
+    bpf_object *object = bpf_object__open_file(opts.object_path.c_str(), nullptr);
     int object_error = libbpf_get_error(object);
     if (object_error)
     {
         std::cerr << "bpf_object__open_file failed: " << strerror(-object_error) << " (" << object_error << ")\n";
         return 1;
     }
-
 
     rc = bpf_object__load(object);
     if (rc != 0)
@@ -242,7 +264,7 @@ int main(int argc, char **argv)
     bpf_object__for_each_program(current, object)
     {
         const char *section = bpf_program__section_name(current);
-        if (section && options.section_name == section)
+        if (section && opts.section_name == section)
         {
             program = current;
             program_found = true;
@@ -252,7 +274,7 @@ int main(int argc, char **argv)
 
     if (!program_found)
     {
-        std::cerr << "Program section not found: " << options.section_name << "\n";
+        std::cerr << "Program section not found: " << opts.section_name << "\n";
         bpf_object__close(object);
         return 1;
     }
@@ -292,23 +314,26 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    std::cout << "Attached TC ingress to " << options.interface_name
-              << " (obj=" << options.object_path << ", sec=" << options.section_name << ")\n";
+    std::cout << "Attached TC ingress to " << opts.interface_name
+              << " (obj=" << opts.object_path << ", sec=" << opts.section_name << ")\n";
 
     while (!g_should_exit)
     {
-        uint64_t passed = ReadPerCpuCounterSum(counters_fd, 0);
-        uint64_t dropped = ReadPerCpuCounterSum(counters_fd, 1);
+        uint64_t passed = read_percpu_counter_sum(counters_fd, 0);
+        uint64_t dropped = read_percpu_counter_sum(counters_fd, 1);
 
         std::cout << "passed=" << passed << " dropped=" << dropped << "\n";
         std::cout.flush();
 
-        if (options.print_once) break;
+        if (opts.print_once)
+        {
+            break;
+        }
 
-        usleep((useconds_t)options.interval_ms * 1000);
+        usleep((useconds_t)opts.interval_ms * 1000);
     }
 
-    bpf_tc_opts detach_opts = {};
+    struct bpf_tc_opts detach_opts = {};
     detach_opts.sz = sizeof(detach_opts);
     detach_opts.handle = tc_opts.handle;
     detach_opts.priority = tc_opts.priority;

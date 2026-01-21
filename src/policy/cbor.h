@@ -1,18 +1,20 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace cs
 {
 
-struct CborError
+struct cbor_error
 {
     std::string msg;
 };
 
-enum class CborType
+enum class cbor_type
 {
     UINT,
     NINT,
@@ -24,101 +26,101 @@ enum class CborType
     NIL,
 };
 
-struct CborValue
+struct cbor_value
 {
-    CborType t = CborType::NIL;
+    cbor_type t = cbor_type::NIL;
 
     uint64_t u = 0;
     int64_t i = 0;
     bool b = false;
     std::vector<uint8_t> bytes;
     std::string text;
-    std::vector<CborValue> arr;
+    std::vector<cbor_value> arr;
     std::vector<uint64_t> map_keys;
-    std::vector<CborValue> map_vals;
+    std::vector<cbor_value> map_vals;
 
-    static CborValue UInt(uint64_t v)
+    static cbor_value make_uint(uint64_t v)
     {
-        CborValue x;
-        x.t = CborType::UINT;
+        cbor_value x;
+        x.t = cbor_type::UINT;
         x.u = v;
         return x;
     }
 
-    static CborValue NInt(int64_t v)
+    static cbor_value make_nint(int64_t v)
     {
-        CborValue x;
-        x.t = CborType::NINT;
+        cbor_value x;
+        x.t = cbor_type::NINT;
         x.i = v;
         return x;
     }
 
-    static CborValue Bool(bool v)
+    static cbor_value make_bool(bool v)
     {
-        CborValue x;
-        x.t = CborType::BOOL;
+        cbor_value x;
+        x.t = cbor_type::BOOL;
         x.b = v;
         return x;
     }
 
-    static CborValue Nil()
+    static cbor_value make_nil()
     {
-        CborValue x;
-        x.t = CborType::NIL;
+        cbor_value x;
+        x.t = cbor_type::NIL;
         return x;
     }
 
-    static CborValue Bytes(std::vector<uint8_t> v)
+    static cbor_value make_bytes(std::vector<uint8_t> v)
     {
-        CborValue x;
-        x.t = CborType::BYTES;
+        cbor_value x;
+        x.t = cbor_type::BYTES;
         x.bytes = std::move(v);
         return x;
     }
 
-    static CborValue Text(std::string v)
+    static cbor_value make_text(std::string v)
     {
-        CborValue x;
-        x.t = CborType::TEXT;
+        cbor_value x;
+        x.t = cbor_type::TEXT;
         x.text = std::move(v);
         return x;
     }
 
-    static CborValue Array(std::vector<CborValue> v)
+    static cbor_value make_array(std::vector<cbor_value> v)
     {
-        CborValue x;
-        x.t = CborType::ARRAY;
+        cbor_value x;
+        x.t = cbor_type::ARRAY;
         x.arr = std::move(v);
         return x;
     }
 
-    static CborValue Map(std::vector<uint64_t> ks, std::vector<CborValue> vs)
+    static cbor_value make_map(std::vector<uint64_t> ks, std::vector<cbor_value> vs)
     {
-        CborValue x;
-        x.t = CborType::MAP;
+        cbor_value x;
+        x.t = cbor_type::MAP;
         x.map_keys = std::move(ks);
         x.map_vals = std::move(vs);
         return x;
     }
 };
 
-struct CborDecodeLimits
+struct cbor_decode_limits
 {
     size_t max_bytes = 1u << 20;
     size_t max_items = 1u << 18;
     int max_depth = 64;
 };
 
-bool CborDecodeStrict(const uint8_t* data, size_t size,
-                      CborValue& out,
-                      size_t& bytes_consumed,
-                      const CborDecodeLimits& lim,
-                      CborError& err);
+bool cbor_decode_strict(const uint8_t *data, size_t size,
+                        cbor_value &out,
+                        size_t &bytes_consumed,
+                        const cbor_decode_limits &lim,
+                        cbor_error &err);
 
-bool CborEncodeCanonical(const CborValue& v,
-                         std::vector<uint8_t>& out,
-                         CborError& err);
+bool cbor_encode_canonical(const cbor_value &v,
+                           std::vector<uint8_t> &out,
+                           cbor_error &err);
 
-std::string CborPretty(const CborValue& v, int indent = 0);
+std::string cbor_pretty(const cbor_value &v, int indent = 0);
 
 } // namespace cs

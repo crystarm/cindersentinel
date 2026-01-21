@@ -5,7 +5,7 @@
 namespace cs
 {
 
-// Stable numeric key mapping for compiled policy (CBOR).
+// Stable numeric key mapping for compiled policy (CBOR)
 // Changing these numbers is a breaking format change!
 
 enum : uint64_t
