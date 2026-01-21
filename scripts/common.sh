@@ -15,7 +15,20 @@ IP_A_PLAIN="${IP_A_PLAIN:-10.10.0.1}"
 IP_B_PLAIN="${IP_B_PLAIN:-10.10.0.2}"
 
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-RelWithDebInfo}"
-CLANG_BIN="${CLANG_BIN:-clang}"
+HOST_CC="${HOST_CC:-${CC:-clang}}"
+HOST_CXX="${HOST_CXX:-${CXX:-clang++}}"
+
+# BPF toolchain. By default we try to follow host clang version if HOST_CC looks like clang*,
+# otherwise we fall back to plain "clang".
+if [[ -z "${BPF_CLANG+x}" ]]; then
+  if [[ "${HOST_CC}" == clang* ]]; then
+    BPF_CLANG="${HOST_CC}"
+  else
+    BPF_CLANG="clang"
+  fi
+fi
+
+CLANG_BIN="${CLANG_BIN:-${BPF_CLANG}}"
 
 MULTIARCH="$(
   dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu

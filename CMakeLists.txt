@@ -51,7 +51,10 @@ execute_process(
   OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-find_program(CLANG clang REQUIRED)
+if (NOT DEFINED CLANG OR CLANG STREQUAL "")
+  find_program(CLANG NAMES clang clang-19 clang-18 REQUIRED)
+endif()
+
 
 set(BPF_OUTPUT_DIR ${CMAKE_SOURCE_DIR}/build)
 set(BPF_TC_OBJ ${BPF_OUTPUT_DIR}/cindersentinel_tc.bpf.o)
