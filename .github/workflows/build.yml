@@ -1,0 +1,34 @@
+name: build (podman + debian)
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+          podman --version
+
+      - name: Build in debian container
+        run: |
+          chmod +x scripts/ci/build-podman.sh
+          scripts/ci/build-podman.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cindersentinel-build
+          path: |
+            build-host/cindersentinel
+            build-host/cindersentineld
+            build/*.bpf.o
+            build-host/CMakeCache.txt
