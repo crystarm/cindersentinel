@@ -1,9 +1,56 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cs_common_dir="$(
+  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+)"
+
+ROOT_DIR="$(cd "${cs_common_dir}/.." && pwd)"
 BUILD_HOST_DIR="${ROOT_DIR}/build-host"
 BUILD_BPF_DIR="${ROOT_DIR}/build"
+
+log_info()
+{
+  printf '%s\n' "$*"
+}
+
+log_warn()
+{
+  printf '%s\n' "$*" >&2
+}
+
+log_err()
+{
+  printf '%s\n' "$*" >&2
+}
+
+die()
+{
+  log_err "$*"
+  exit 1
+}
+
+resolve_bin()
+{
+  command -v -- "$1" 2>/dev/null || true
+}
+
+ver1()
+{
+  local bin="${1:-}"
+  local out=""
+
+  if [[ -z "${bin}" ]]; then
+    printf '%s' "<not found>"
+    return 0
+  fi
+
+  out="$("${bin}" --version 2>/dev/null | head -n 1 || true)"
+  if [[ -z "${out}" ]]; then
+    out="<unknown>"
+  fi
+  printf '%s' "${out}"
+}
 
 IFACE_A="${IFACE_A:-cs-vethA}"
 IFACE_B="${IFACE_B:-cs-vethB}"
@@ -29,7 +76,7 @@ fi
 CLANG_BIN="${CLANG_BIN:-${BPF_CLANG}}"
 
 MULTIARCH="$(
-  dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo x86_64-linux-gnu
+  dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || printf '%s\n' "x86_64-linux-gnu"
 )"
 
 BPF_CFLAGS=(

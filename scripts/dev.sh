@@ -1,27 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/common.sh"
+script_dir="$(
+  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+)"
+source "${script_dir}/common.sh"
 
 usage()
 {
   cat <<USAGE
 Usage:
-  ${SCRIPT_DIR}/dev.sh build            - build host + bpf objects
-  ${SCRIPT_DIR}/dev.sh up               - create netns testbed
-  ${SCRIPT_DIR}/dev.sh down             - destroy netns testbed
-  ${SCRIPT_DIR}/dev.sh tc               - build everything + run cindersentineld (tc backend) inside netns
-  ${SCRIPT_DIR}/dev.sh xdp              - build bpf + attach xdp + ping + watch counters
-  ${SCRIPT_DIR}/dev.sh xdp-on           - attach xdp (generic) on cs-a/${IFACE_A}
-  ${SCRIPT_DIR}/dev.sh xdp-off          - detach xdp
-  ${SCRIPT_DIR}/dev.sh counters         - watch counters map
+  ${script_dir}/dev.sh build            - build host + bpf objects
+  ${script_dir}/dev.sh up               - create netns testbed
+  ${script_dir}/dev.sh down             - destroy netns testbed
+  ${script_dir}/dev.sh tc               - build everything + run cindersentineld (tc backend) inside netns
+  ${script_dir}/dev.sh xdp              - build bpf + attach xdp + ping + watch counters
+  ${script_dir}/dev.sh xdp-on           - attach xdp (generic) on cs-a/${IFACE_A}
+  ${script_dir}/dev.sh xdp-off          - detach xdp
+  ${script_dir}/dev.sh counters         - watch counters map
 
-    ${SCRIPT_DIR}/dev.sh icmp forbid|let|show
-    ${SCRIPT_DIR}/dev.sh tcp  forbid|let|show <port?>
-    ${SCRIPT_DIR}/dev.sh udp  forbid|let|show <port?>
+    ${script_dir}/dev.sh icmp forbid|let|show
+    ${script_dir}/dev.sh tcp  forbid|let|show <port?>
+    ${script_dir}/dev.sh udp  forbid|let|show <port?>
 
-  ${SCRIPT_DIR}/dev.sh clean            - alias for down
+  ${script_dir}/dev.sh clean            - alias for down
 USAGE
 }
 
@@ -30,32 +32,32 @@ shift || true
 
 case "${cmd}" in
   build)
-    "${SCRIPT_DIR}/build-host.sh"
-    "${SCRIPT_DIR}/build-bpf.sh"
+    "${script_dir}/build-host.sh"
+    "${script_dir}/build-bpf.sh"
     ;;
 
   up)
-    sudo -E "${SCRIPT_DIR}/netns-up.sh" "$@"
+    sudo -E "${script_dir}/netns-up.sh" "$@"
     ;;
 
   down|clean)
-    sudo -E "${SCRIPT_DIR}/netns-down.sh" "$@"
+    sudo -E "${script_dir}/netns-down.sh" "$@"
     ;;
 
   tc)
-    exec "${SCRIPT_DIR}/dev-tc.sh" "$@"
+    exec "${script_dir}/dev-tc.sh" "$@"
     ;;
 
   xdp)
-    exec "${SCRIPT_DIR}/dev-xdp.sh" "$@"
+    exec "${script_dir}/dev-xdp.sh" "$@"
     ;;
 
   xdp-on)
-    sudo -E "${SCRIPT_DIR}/xdp-attach.sh" "$@"
+    sudo -E "${script_dir}/xdp-attach.sh" "$@"
     ;;
 
   xdp-off)
-    sudo -E "${SCRIPT_DIR}/xdp-detach.sh" "$@"
+    sudo -E "${script_dir}/xdp-detach.sh" "$@"
     ;;
 
   counters)
@@ -71,7 +73,7 @@ case "${cmd}" in
     ;;
 
   *)
-    echo "Unknown command: ${cmd}"
+    log_err "Unknown command: ${cmd}"
     usage
     exit 2
     ;;

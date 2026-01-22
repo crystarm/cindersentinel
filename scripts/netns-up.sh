@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname "$0")/common.sh"
+
+script_dir="$(
+  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+)"
+source "${script_dir}/common.sh"
 need_root "$@"
 
 ip netns del "${NS_A}" 2>/dev/null || true
@@ -22,5 +26,8 @@ ip netns exec "${NS_B}" ip link set "${IFACE_B}" up
 ip netns exec "${NS_A}" ip link set lo up
 ip netns exec "${NS_B}" ip link set lo up
 
-ip netns exec "${NS_A}" ping -c 1 "${IP_B_PLAIN}" >/dev/null
-echo "netns ready: ${NS_A}:${IFACE_A} <-> ${NS_B}:${IFACE_B}"
+if ! ip netns exec "${NS_A}" ping -c 1 "${IP_B_PLAIN}" >/dev/null 2>&1; then
+  die "netns not ready: ping failed (${NS_A} -> ${IP_B_PLAIN})"
+fi
+
+log_info "netns ready: ${NS_A}:${IFACE_A} <-> ${NS_B}:${IFACE_B}"

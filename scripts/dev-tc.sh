@@ -1,23 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname "$0")/common.sh"
 
-SCRIPT_DIR="$(dirname "$0")"
+script_dir="$(
+  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+)"
+source "${script_dir}/common.sh"
 
-"${SCRIPT_DIR}/build-host.sh"
-"${SCRIPT_DIR}/build-bpf.sh"
+"${script_dir}/build-host.sh"
+"${script_dir}/build-bpf.sh"
 
-sudo -E "${SCRIPT_DIR}/netns-up.sh"
+sudo -E "${script_dir}/netns-up.sh"
 
 if [[ ! -f "${TC_OBJ}" ]]; then
-  echo "Missing: ${TC_OBJ}"
-  exit 1
+  die "Missing: ${TC_OBJ}"
+fi
+
+if [[ ! -x "${HOST_BIN}" ]]; then
+  if [[ -f "${HOST_BIN}" ]]; then
+    die "Not executable: ${HOST_BIN}"
+  fi
+  die "Missing: ${HOST_BIN}"
 fi
 
 sudo -E ip netns exec "${NS_A}" tc filter del dev "${IFACE_A}" ingress 2>/dev/null || true
 sudo -E ip netns exec "${NS_A}" tc qdisc del dev "${IFACE_A}" clsact 2>/dev/null || true
 sudo -E ip netns exec "${NS_A}" tc qdisc replace dev "${IFACE_A}" clsact >/dev/null 2>&1 || true
 
-echo "running tc backend:"
-echo "  ${HOST_BIN} --iface ${IFACE_A} --obj ${TC_OBJ}"
+log_info "running tc backend:"
+printf '  %s --iface %s --obj %s\n' "${HOST_BIN}" "${IFACE_A}" "${TC_OBJ}"
 exec sudo -E ip netns exec "${NS_A}" "${HOST_BIN}" --iface "${IFACE_A}" --obj "${TC_OBJ}"

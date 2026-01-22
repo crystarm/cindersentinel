@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname "$0")/common.sh"
+
+script_dir="$(
+  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+)"
+source "${script_dir}/common.sh"
 need_root "$@"
+
+if [[ -z "$(resolve_bin bpftool)" ]]; then
+  die "watch-counters.sh: bpftool not found"
+fi
 
 MAP_ID="$(
   bpftool map show | awk '
-    /name cs_cnt/ { id=$1 }
+    $0 ~ " name cs_cnt " {
+      id=$1
+    }
     END {
       if (id == "") exit 1;
       sub(":", "", id);
       print id
     }'
-)" || {
-  echo "Cannot find map: cs_cnt"
-  exit 1
-}
+)" || die "Cannot find map: cs_cnt"
 
-echo "watching counters map id=${MAP_ID}"
+log_info "watching counters map id=${MAP_ID}"
 trap 'exit 0' INT TERM
 
 bpftool map dump id "${MAP_ID}" >/dev/null 2>&1 || true
