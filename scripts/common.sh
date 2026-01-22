@@ -93,6 +93,6 @@ XDP_OBJ="${BUILD_BPF_DIR}/cindersentinel_xdp.bpf.o"
 need_root()
 {
   if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-    exec sudo -E bash "$0" "$@"
+    exec sudo -E "${BASH:-bash}" "$0" "$@"
   fi
 }

@@ -182,6 +182,37 @@ static uint64_t read_percpu_counter_sum(int map_fd, uint32_t key)
     return sum;
 }
 
+static bool is_tc_absent_rc(int rc)
+{
+    return rc == -ENOENT || rc == -EINVAL;
+}
+
+static void init_tc_hook(struct bpf_tc_hook &hook, int ifindex, enum bpf_tc_attach_point attach_point)
+{
+    memset(&hook, 0, sizeof(hook));
+    hook.sz = sizeof(hook);
+    hook.ifindex = ifindex;
+    hook.attach_point = attach_point;
+}
+
+static void init_tc_opts(struct bpf_tc_opts &opts, int handle, int priority)
+{
+    memset(&opts, 0, sizeof(opts));
+    opts.sz = sizeof(opts);
+    opts.handle = handle;
+    opts.priority = priority;
+}
+
+static void print_tc_err(const char *what, int rc)
+{
+    if (rc < 0)
+    {
+        std::cerr << what << " failed: " << strerror(-rc) << " (" << rc << ")\n";
+        return;
+    }
+    std::cerr << what << " failed: " << rc << "\n";
+}
+
 int main(int argc, char **argv)
 {
     options opts;
@@ -200,48 +231,86 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    unsigned int ifindex = if_nametoindex(opts.interface_name.c_str());
-    if (ifindex == 0)
+    unsigned int ifindex_u = if_nametoindex(opts.interface_name.c_str());
+    if (ifindex_u == 0)
     {
         std::cerr << "Unknown interface: " << opts.interface_name << "\n";
         return 1;
     }
 
+    int ifindex = (int)ifindex_u;
+
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
+    const int tc_handle = 1;
+    const int tc_priority = 1;
+
     struct bpf_tc_hook hook = {};
-    hook.sz = sizeof(hook);
-    hook.ifindex = (int)ifindex;
-    hook.attach_point = BPF_TC_INGRESS;
-
-    bpf_tc_hook_destroy(&hook);
-
-    int rc = bpf_tc_hook_create(&hook);
-    if (rc != 0 && rc != -EEXIST)
-    {
-        std::cerr << "bpf_tc_hook_create failed: " << rc << "\n";
-        return 1;
-    }
+    init_tc_hook(hook, ifindex, BPF_TC_INGRESS);
 
     struct bpf_tc_opts tc_opts = {};
-    tc_opts.sz = sizeof(tc_opts);
-    tc_opts.handle = 1;
-    tc_opts.priority = 1;
+    init_tc_opts(tc_opts, tc_handle, tc_priority);
+
+    auto destroy_hook = [&](enum bpf_tc_attach_point ap)
+    {
+        struct bpf_tc_hook tmp = {};
+        init_tc_hook(tmp, ifindex, ap);
+        int rc = bpf_tc_hook_destroy(&tmp);
+        if (rc != 0 && !is_tc_absent_rc(rc) && rc != -EBUSY)
+        {
+            print_tc_err("bpf_tc_hook_destroy", rc);
+        }
+        else if (rc == -EBUSY)
+        {
+            std::cerr << "bpf_tc_hook_destroy: busy (" << opts.interface_name << ")\n";
+        }
+    };
+
+    auto detach_filter = [&](enum bpf_tc_attach_point ap)
+    {
+        struct bpf_tc_hook tmp_hook = {};
+        init_tc_hook(tmp_hook, ifindex, ap);
+
+        struct bpf_tc_opts tmp_opts = {};
+        init_tc_opts(tmp_opts, tc_handle, tc_priority);
+
+        int rc = bpf_tc_detach(&tmp_hook, &tmp_opts);
+        if (rc != 0 && !is_tc_absent_rc(rc))
+        {
+            print_tc_err("bpf_tc_detach", rc);
+        }
+    };
+
+    auto cleanup_tc = [&]()
+    {
+        detach_filter(BPF_TC_INGRESS);
+        detach_filter(BPF_TC_EGRESS);
+
+        destroy_hook(BPF_TC_INGRESS);
+        destroy_hook(BPF_TC_EGRESS);
+    };
 
     if (opts.detach_only)
     {
-        rc = bpf_tc_detach(&hook, &tc_opts);
-        if (rc != 0)
-        {
-            std::cerr << "bpf_tc_detach failed: " << rc << "\n";
-            return 1;
-        }
+        cleanup_tc();
         std::cout << "Detached from " << opts.interface_name << "\n";
         return 0;
     }
 
-    bpf_object *object = bpf_object__open_file(opts.object_path.c_str(), nullptr);
+    cleanup_tc();
+
+    int rc = bpf_tc_hook_create(&hook);
+    if (rc != 0 && rc != -EEXIST)
+    {
+        print_tc_err("bpf_tc_hook_create", rc);
+        return 1;
+    }
+
+    bpf_object *object = nullptr;
+    bool tc_attached = false;
+
+    object = bpf_object__open_file(opts.object_path.c_str(), nullptr);
     int object_error = libbpf_get_error(object);
     if (object_error)
     {
@@ -252,8 +321,9 @@ int main(int argc, char **argv)
     rc = bpf_object__load(object);
     if (rc != 0)
     {
-        std::cerr << "bpf_object__load failed: " << rc << "\n";
+        print_tc_err("bpf_object__load", rc);
         bpf_object__close(object);
+        cleanup_tc();
         return 1;
     }
 
@@ -276,6 +346,7 @@ int main(int argc, char **argv)
     {
         std::cerr << "Program section not found: " << opts.section_name << "\n";
         bpf_object__close(object);
+        cleanup_tc();
         return 1;
     }
 
@@ -284,6 +355,7 @@ int main(int argc, char **argv)
     {
         std::cerr << "bpf_program__fd failed\n";
         bpf_object__close(object);
+        cleanup_tc();
         return 1;
     }
 
@@ -292,6 +364,7 @@ int main(int argc, char **argv)
     {
         std::cerr << "Map not found: cs_cnt\n";
         bpf_object__close(object);
+        cleanup_tc();
         return 1;
     }
 
@@ -300,6 +373,7 @@ int main(int argc, char **argv)
     {
         std::cerr << "bpf_map__fd failed\n";
         bpf_object__close(object);
+        cleanup_tc();
         return 1;
     }
 
@@ -309,10 +383,13 @@ int main(int argc, char **argv)
     rc = bpf_tc_attach(&hook, &tc_opts);
     if (rc != 0)
     {
-        std::cerr << "bpf_tc_attach failed: " << rc << "\n";
+        print_tc_err("bpf_tc_attach", rc);
         bpf_object__close(object);
+        cleanup_tc();
         return 1;
     }
+
+    tc_attached = true;
 
     std::cout << "Attached TC ingress to " << opts.interface_name
               << " (obj=" << opts.object_path << ", sec=" << opts.section_name << ")\n";
@@ -333,18 +410,20 @@ int main(int argc, char **argv)
         usleep((useconds_t)opts.interval_ms * 1000);
     }
 
-    struct bpf_tc_opts detach_opts = {};
-    detach_opts.sz = sizeof(detach_opts);
-    detach_opts.handle = tc_opts.handle;
-    detach_opts.priority = tc_opts.priority;
-
-    rc = bpf_tc_detach(&hook, &detach_opts);
-    if (rc != 0 && rc != -ENOENT)
+    if (tc_attached)
     {
-        std::cerr << "bpf_tc_detach failed: " << strerror(-rc) << " (" << rc << ")\n";
+        struct bpf_tc_opts detach_opts = {};
+        init_tc_opts(detach_opts, tc_handle, tc_priority);
+
+        rc = bpf_tc_detach(&hook, &detach_opts);
+        if (rc != 0 && !is_tc_absent_rc(rc))
+        {
+            print_tc_err("bpf_tc_detach", rc);
+        }
     }
 
-    bpf_tc_hook_destroy(&hook);
+    destroy_hook(BPF_TC_INGRESS);
+    destroy_hook(BPF_TC_EGRESS);
 
     bpf_object__close(object);
     std::cout << "Stopped\n";

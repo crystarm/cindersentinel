@@ -22,10 +22,6 @@ if [[ ! -x "${HOST_BIN}" ]]; then
   die "Missing: ${HOST_BIN}"
 fi
 
-sudo -E ip netns exec "${NS_A}" tc filter del dev "${IFACE_A}" ingress 2>/dev/null || true
-sudo -E ip netns exec "${NS_A}" tc qdisc del dev "${IFACE_A}" clsact 2>/dev/null || true
-sudo -E ip netns exec "${NS_A}" tc qdisc replace dev "${IFACE_A}" clsact >/dev/null 2>&1 || true
-
 log_info "running tc backend:"
 printf '  %s --iface %s --obj %s\n' "${HOST_BIN}" "${IFACE_A}" "${TC_OBJ}"
 exec sudo -E ip netns exec "${NS_A}" "${HOST_BIN}" --iface "${IFACE_A}" --obj "${TC_OBJ}"
