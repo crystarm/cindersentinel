@@ -16,6 +16,8 @@ endif()
 
 message(STATUS "Found libbpf, version ${LIBBPF_VERSION}")
 
+find_package(OpenSSL REQUIRED)
+
 
 add_executable(cindersentineld
     src/cindersentineld.cpp
@@ -39,6 +41,10 @@ add_executable(cindersentinel
     src/cindersentinel.cpp
     src/policy/cbor.cpp
     src/policy/scheme.cpp
+    src/policy/hash.cpp
+    src/policy/state_store.cpp
+    src/policy/maps_pins.cpp
+    src/policy/apply.cpp
 )
 
 target_include_directories(cindersentinel PRIVATE
@@ -51,6 +57,7 @@ target_compile_options(cindersentinel PRIVATE
 
 target_link_libraries(cindersentinel PRIVATE
     ${LIBBPF_LIBRARIES}
+    OpenSSL::Crypto
     elf
     z
 )
