@@ -75,6 +75,7 @@ endif()
 
 set(BPF_OUTPUT_DIR ${CMAKE_SOURCE_DIR}/build)
 set(BPF_TC_OBJ ${BPF_OUTPUT_DIR}/cindersentinel_tc.bpf.o)
+set(BPF_XDP_OBJ ${BPF_OUTPUT_DIR}/cindersentinel_xdp.bpf.o)
 
 add_custom_command(
   OUTPUT ${BPF_TC_OBJ}
@@ -88,5 +89,17 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(cindersentinel_bpf ALL DEPENDS ${BPF_TC_OBJ})
+add_custom_command(
+  OUTPUT ${BPF_XDP_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BPF_OUTPUT_DIR}
+  COMMAND ${CLANG} -O2 -g -target bpf -D__TARGET_ARCH_x86
+          -I/usr/include/${DEB_MULTIARCH}
+          -I/usr/include
+          -c ${CMAKE_SOURCE_DIR}/bpf/cindersentinel_xdp.bpf.c
+          -o ${BPF_XDP_OBJ}
+  DEPENDS ${CMAKE_SOURCE_DIR}/bpf/cindersentinel_xdp.bpf.c
+  VERBATIM
+)
+
+add_custom_target(cindersentinel_bpf ALL DEPENDS ${BPF_TC_OBJ} ${BPF_XDP_OBJ})
 add_dependencies(cindersentineld cindersentinel_bpf)

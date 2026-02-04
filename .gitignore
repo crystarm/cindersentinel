@@ -7,3 +7,8 @@ build*/
 
 *.cbor
 *.cbor.tmp
+
+*.patch
+
+*.buff
+*.tmp

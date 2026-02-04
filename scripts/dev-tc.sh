@@ -23,5 +23,5 @@ if [[ ! -x "${HOST_BIN}" ]]; then
 fi
 
 log_info "running tc backend:"
-printf '  %s --iface %s --obj %s\n' "${HOST_BIN}" "${IFACE_A}" "${TC_OBJ}"
-exec sudo -E ip netns exec "${NS_A}" "${HOST_BIN}" --iface "${IFACE_A}" --obj "${TC_OBJ}"
+printf '  %s --backend tc --iface %s --obj %s\n' "${HOST_BIN}" "${IFACE_A}" "${TC_OBJ}"
+exec sudo -E ip netns exec "${NS_A}" "${HOST_BIN}" --backend tc --iface "${IFACE_A}" --obj "${TC_OBJ}"
