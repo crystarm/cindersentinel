@@ -30,6 +30,7 @@ podman run --rm -t \
       cmake make pkg-config \
       clang lld llvm \
       g++ \
+      libssl-dev \
       libbpf-dev libelf-dev zlib1g-dev \
       dpkg-dev \
       xz-utils git
