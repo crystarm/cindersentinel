@@ -670,10 +670,10 @@ int main(int argc, char **argv)
         }
 
         uint32_t flags = xdp_flags_for_mode(opts);
-        int rc = bpf_set_link_xdp_fd(ifindex, -1, flags);
+        int rc = bpf_xdp_detach(ifindex, flags, nullptr);
         if (rc != 0 && rc != -ENOENT && rc != -EINVAL)
         {
-            std::cerr << "xdp detach failed: " << strerror(-rc) << " (" << rc << ")\n";
+            std::cerr << "bpf_xdp_detach failed: " << strerror(-rc) << " (" << rc << ")\n";
             return 1;
         }
         std::cout << "Detached xdp (" << xdp_mode_str(opts.xdp_mode_kind) << ") from " << opts.interface_name << "\n";
@@ -759,12 +759,12 @@ int main(int argc, char **argv)
 
     uint32_t flags = xdp_flags_for_mode(opts);
 
-    (void)bpf_set_link_xdp_fd(ifindex, -1, flags);
+    (void)bpf_xdp_detach(ifindex, flags, nullptr);
 
-    int rc = bpf_set_link_xdp_fd(ifindex, program_fd, flags);
+    int rc = bpf_xdp_attach(ifindex, program_fd, flags, nullptr);
     if (rc != 0)
     {
-        std::cerr << "xdp attach failed: " << strerror(-rc) << " (" << rc << ")\n";
+        std::cerr << "bpf_xdp_attach failed: " << strerror(-rc) << " (" << rc << ")\n";
         bpf_object__close(object);
         return 1;
     }
@@ -789,10 +789,10 @@ int main(int argc, char **argv)
         usleep((useconds_t)opts.interval_ms * 1000);
     }
 
-    rc = bpf_set_link_xdp_fd(ifindex, -1, flags);
+    rc = bpf_xdp_detach(ifindex, flags, nullptr);
     if (rc != 0 && rc != -ENOENT && rc != -EINVAL)
     {
-        std::cerr << "xdp detach failed: " << strerror(-rc) << " (" << rc << ")\n";
+        std::cerr << "bpf_xdp_detach failed: " << strerror(-rc) << " (" << rc << ")\n";
     }
 
     bpf_object__close(object);
