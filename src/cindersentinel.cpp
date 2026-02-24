@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "policy/scheme.h"
+#include "policy/maps_pins.h"
 
 static void die(const std::string &msg);
 
@@ -76,88 +77,93 @@ static bool is_alias(const std::string &s, const std::initializer_list<const cha
     return false;
 }
 
-static int find_map_fd_by_name_best_effort(const std::string &name, uint32_t *out_id = nullptr)
+enum class runtime_backend
 {
-    uint32_t id = 0, next = 0;
-    int best_fd = -1;
-    uint32_t best_id = 0;
-    int matches = 0;
+    tc,
+    xdp,
+    all,
+};
 
-    while (bpf_map_get_next_id(id, &next) == 0)
+struct runtime_opts
+{
+    std::string iface;
+    runtime_backend backend = runtime_backend::all;
+    std::string pin_base = "/sys/fs/bpf/cindersentinel";
+};
+
+static bool parse_backend_value(const std::string &s, runtime_backend &out)
+{
+    if (s == "tc")
     {
-        int fd = bpf_map_get_fd_by_id(next);
-        if (fd < 0) { id = next; continue; }
+        out = runtime_backend::tc;
+        return true;
+    }
+    if (s == "xdp")
+    {
+        out = runtime_backend::xdp;
+        return true;
+    }
+    if (s == "all")
+    {
+        out = runtime_backend::all;
+        return true;
+    }
+    return false;
+}
 
-        bpf_map_info info {};
-        uint32_t len = sizeof(info);
-        if (bpf_obj_get_info_by_fd(fd, &info, &len) != 0)
+static void parse_runtime_opts(int argc, char **argv, int start,
+                               runtime_opts &out,
+                               std::vector<std::string> &rest)
+{
+    for (int i = start; i < argc; ++i)
+    {
+        std::string a = argv[i];
+        if (a == "--iface")
         {
-            close(fd);
-            id = next;
-            continue;
+            if (i + 1 >= argc) die("--iface requires value");
+            out.iface = argv[++i];
         }
-
-        if (name == info.name)
+        else if (a == "--backend")
         {
-            matches++;
-            if (next >= best_id)
-            {
-                if (best_fd >= 0) close(best_fd);
-                best_fd = fd;
-                best_id = next;
-            }
-            else
-            {
-                close(fd);
-            }
+            if (i + 1 >= argc) die("--backend requires value");
+            runtime_backend b;
+            if (!parse_backend_value(argv[i + 1], b))
+                die("bad --backend value (expected: tc|xdp|all)");
+            out.backend = b;
+            ++i;
+        }
+        else if (a == "--pin-base")
+        {
+            if (i + 1 >= argc) die("--pin-base requires value");
+            out.pin_base = argv[++i];
         }
         else
         {
-            close(fd);
+            rest.push_back(a);
         }
-
-        id = next;
     }
-
-    if (best_fd < 0) return -1;
-    if (out_id) *out_id = best_id;
-
-    if (matches > 1)
-    {
-        std::cerr << "cindersentinel: warning: multiple maps named '" << name
-                  << "', using id " << best_id << "\n";
-    }
-
-    return best_fd;
 }
 
-static int open_map_checked(const std::string &name, bpf_map_type type, uint32_t key_sz, uint32_t val_sz)
+
+
+static bool open_pinned_maps_for_backend(const runtime_opts &rt,
+                                         cs::cs_backend backend,
+                                         cs::maps_fds &out,
+                                         std::string &err)
 {
-    uint32_t id = 0;
-    int fd = find_map_fd_by_name_best_effort(name, &id);
-    if (fd < 0)
+    cs::maps_pins_opts opt;
+    opt.pin_base = rt.pin_base;
+    opt.iface = rt.iface;
+    opt.backend = backend;
+
+    cs::maps_error e;
+    if (cs::open_pinned_maps(opt, out, e) != 0)
     {
-        die("map '" + name + "' not found. Is dataplane attached? (run ./scripts/dev.sh tc or xdp-on)");
+        err = e.msg;
+        return false;
     }
 
-    bpf_map_info info {};
-    uint32_t len = sizeof(info);
-    if (bpf_obj_get_info_by_fd(fd, &info, &len) != 0)
-    {
-        close(fd);
-        die("bpf_obj_get_info_by_fd failed for map '" + name + "': " + std::string(strerror(errno)));
-    }
-
-    if ((bpf_map_type)info.type != type || info.key_size != key_sz || info.value_size != val_sz)
-    {
-        std::cerr << "cindersentinel: map '" << name << "' has unexpected shape: "
-                  << "type=" << info.type << " key=" << info.key_size << " value=" << info.value_size
-                  << " (expected type=" << (int)type << " key=" << key_sz << " value=" << val_sz << ")\n";
-        close(fd);
-        exit(2);
-    }
-
-    return fd;
+    return true;
 }
 
 static uint64_t read_percpu_sum_u64(int map_fd, uint32_t key)
@@ -219,54 +225,142 @@ static uint16_t parse_port(const std::string &s)
     return (uint16_t)v;
 }
 
-static void cmd_aura()
+static void cmd_aura_from_maps(const cs::maps_fds &fds, const char *label, bool show_label)
 {
-    int fd_icmp = open_map_checked("cs_blk_icmp", BPF_MAP_TYPE_ARRAY, 4, 1);
-    int fd_tcp  = open_map_checked("cs_blk_tcp",  BPF_MAP_TYPE_HASH,  2, 1);
-    int fd_udp  = open_map_checked("cs_blk_udp",  BPF_MAP_TYPE_HASH,  2, 1);
+    if (show_label) std::cout << "backend=" << label << "\n";
 
     uint32_t k0 = 0;
     uint8_t v = 0;
-    (void)bpf_map_lookup_elem(fd_icmp, &k0, &v);
+    (void)bpf_map_lookup_elem(fds.fd_blk_icmp, &k0, &v);
 
     std::cout << "icmp: " << (v ? "forbid" : "let") << "\n";
 
-    auto tcp = dump_port_set(fd_tcp);
-    auto udp = dump_port_set(fd_udp);
+    auto tcp = dump_port_set(fds.fd_blk_tcp);
+    auto udp = dump_port_set(fds.fd_blk_udp);
 
     print_ports_line("tcp_forbidden: ", tcp);
     print_ports_line("udp_forbidden: ", udp);
-
-    close(fd_icmp);
-    close(fd_tcp);
-    close(fd_udp);
 }
 
-static void cmd_embers(bool watch, int interval_ms)
+static void cmd_aura(const runtime_opts &rt)
 {
-    int fd_cnt = open_map_checked("cs_cnt", BPF_MAP_TYPE_PERCPU_ARRAY, 4, 8);
+    cs::maps_fds tc_fds;
+    cs::maps_fds xdp_fds;
+    bool have_tc = false;
+    bool have_xdp = false;
+    std::string err_tc;
+    std::string err_xdp;
+
+    if (rt.backend == runtime_backend::tc || rt.backend == runtime_backend::all)
+        have_tc = open_pinned_maps_for_backend(rt, cs::cs_backend::TC, tc_fds, err_tc);
+    if (rt.backend == runtime_backend::xdp || rt.backend == runtime_backend::all)
+        have_xdp = open_pinned_maps_for_backend(rt, cs::cs_backend::XDP, xdp_fds, err_xdp);
+
+    if (rt.backend == runtime_backend::tc)
+    {
+        if (!have_tc) die("aura: " + err_tc);
+    }
+    else if (rt.backend == runtime_backend::xdp)
+    {
+        if (!have_xdp) die("aura: " + err_xdp);
+    }
+    else
+    {
+        if (!have_tc && !have_xdp)
+            die("aura: no pinned maps found for tc or xdp");
+        if (!have_tc)
+            std::cerr << "cindersentinel: warning: no pinned maps for tc (" << err_tc << ")\n";
+        if (!have_xdp)
+            std::cerr << "cindersentinel: warning: no pinned maps for xdp (" << err_xdp << ")\n";
+    }
+
+    bool show_label = (rt.backend == runtime_backend::all);
+
+    if (have_tc) cmd_aura_from_maps(tc_fds, "tc", show_label);
+    if (have_xdp) cmd_aura_from_maps(xdp_fds, "xdp", show_label);
+}
+
+static void cmd_embers_from_maps(const cs::maps_fds &fds, const char *label, bool show_label)
+{
+    uint64_t passed = read_percpu_sum_u64(fds.fd_cnt, 0);
+    uint64_t dropped_total = read_percpu_sum_u64(fds.fd_cnt, 1);
+    uint64_t drop_icmp = read_percpu_sum_u64(fds.fd_cnt, 2);
+    uint64_t drop_tcp = read_percpu_sum_u64(fds.fd_cnt, 3);
+    uint64_t drop_udp = read_percpu_sum_u64(fds.fd_cnt, 4);
+
+    if (show_label) std::cout << "backend=" << label << " ";
+
+    std::cout
+        << "passed=" << passed
+        << " dropped=" << dropped_total
+        << " drop_icmp=" << drop_icmp
+        << " drop_tcp_port=" << drop_tcp
+        << " drop_udp_port=" << drop_udp
+        << "\n";
+}
+
+static void cmd_embers(const runtime_opts &rt, const std::vector<std::string> &args)
+{
+    bool watch = false;
+    int interval_ms = 1000;
+
+    for (size_t i = 0; i < args.size(); ++i)
+    {
+        std::string a = args[i];
+        if (a == "--watch") watch = true;
+        else if (a == "--interval-ms")
+        {
+            if (i + 1 >= args.size()) die("--interval-ms requires value");
+            interval_ms = atoi(args[++i].c_str());
+            if (interval_ms < 10) interval_ms = 10;
+        }
+        else
+        {
+            die("unknown embers arg: " + a);
+        }
+    }
+
+    cs::maps_fds tc_fds;
+    cs::maps_fds xdp_fds;
+    bool have_tc = false;
+    bool have_xdp = false;
+    std::string err_tc;
+    std::string err_xdp;
+
+    if (rt.backend == runtime_backend::tc || rt.backend == runtime_backend::all)
+        have_tc = open_pinned_maps_for_backend(rt, cs::cs_backend::TC, tc_fds, err_tc);
+    if (rt.backend == runtime_backend::xdp || rt.backend == runtime_backend::all)
+        have_xdp = open_pinned_maps_for_backend(rt, cs::cs_backend::XDP, xdp_fds, err_xdp);
+
+    if (rt.backend == runtime_backend::tc)
+    {
+        if (!have_tc) die("embers: " + err_tc);
+    }
+    else if (rt.backend == runtime_backend::xdp)
+    {
+        if (!have_xdp) die("embers: " + err_xdp);
+    }
+    else
+    {
+        if (!have_tc && !have_xdp)
+            die("embers: no pinned maps found for tc or xdp");
+        if (!have_tc)
+            std::cerr << "cindersentinel: warning: no pinned maps for tc (" << err_tc << ")\n";
+        if (!have_xdp)
+            std::cerr << "cindersentinel: warning: no pinned maps for xdp (" << err_xdp << ")\n";
+    }
+
+    bool show_label = (rt.backend == runtime_backend::all);
 
     auto print_once = [&]()
     {
-        uint64_t passed = read_percpu_sum_u64(fd_cnt, 0);
-        uint64_t dropped_total = read_percpu_sum_u64(fd_cnt, 1);
-        uint64_t drop_icmp = read_percpu_sum_u64(fd_cnt, 2);
-        uint64_t drop_tcp = read_percpu_sum_u64(fd_cnt, 3);
-        uint64_t drop_udp = read_percpu_sum_u64(fd_cnt, 4);
-
-        std::cout
-            << "passed=" << passed
-            << " dropped=" << dropped_total
-            << " drop_icmp=" << drop_icmp
-            << " drop_tcp_port=" << drop_tcp
-            << " drop_udp_port=" << drop_udp
-            << "\n";
+        if (have_tc) cmd_embers_from_maps(tc_fds, "tc", show_label);
+        if (have_xdp) cmd_embers_from_maps(xdp_fds, "xdp", show_label);
     };
 
     if (!watch)
     {
         print_once();
-        close(fd_cnt);
         return;
     }
 
@@ -278,88 +372,128 @@ static void cmd_embers(bool watch, int interval_ms)
         print_once();
         usleep((useconds_t)interval_ms * 1000u);
     }
-
-    close(fd_cnt);
 }
 
-static void cmd_etch(int argc, char **argv)
+static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &args)
 {
-    if (argc < 1) die("etch: missing target (icmp|tcp|udp)");
+    if (args.size() < 1) die("etch: missing target (icmp|tcp|udp)");
 
-    std::string target = argv[0];
+    std::string target = args[0];
     if (target != "icmp" && target != "tcp" && target != "udp")
         die("etch: bad target: " + target);
 
-    if (argc < 2) die("etch: missing action");
+    if (args.size() < 2) die("etch: missing action");
 
-    std::string act = argv[1];
+    std::string act = args[1];
+
+    cs::maps_fds tc_fds;
+    cs::maps_fds xdp_fds;
+    bool have_tc = false;
+    bool have_xdp = false;
+    std::string err_tc;
+    std::string err_xdp;
+
+    if (rt.backend == runtime_backend::tc || rt.backend == runtime_backend::all)
+        have_tc = open_pinned_maps_for_backend(rt, cs::cs_backend::TC, tc_fds, err_tc);
+    if (rt.backend == runtime_backend::xdp || rt.backend == runtime_backend::all)
+        have_xdp = open_pinned_maps_for_backend(rt, cs::cs_backend::XDP, xdp_fds, err_xdp);
+
+    if (rt.backend == runtime_backend::tc)
+    {
+        if (!have_tc) die("etch: " + err_tc);
+    }
+    else if (rt.backend == runtime_backend::xdp)
+    {
+        if (!have_xdp) die("etch: " + err_xdp);
+    }
+    else
+    {
+        if (!have_tc || !have_xdp)
+            die("etch: backend=all requires pinned maps for both tc and xdp");
+    }
+
+    struct backend_entry
+    {
+        const char *label;
+        cs::maps_fds *fds;
+    };
+
+    std::vector<backend_entry> backends;
+    if (have_tc) backends.push_back({"tc", &tc_fds});
+    if (have_xdp) backends.push_back({"xdp", &xdp_fds});
+
+    bool show_label = backends.size() > 1;
 
     if (target == "icmp")
     {
-        int fd = open_map_checked("cs_blk_icmp", BPF_MAP_TYPE_ARRAY, 4, 1);
-        uint32_t k0 = 0;
+        for (auto &b : backends)
+        {
+            uint32_t k0 = 0;
 
-        if (is_alias(act, {"forbid","on"}))
-        {
-            uint8_t v = 1;
-            if (bpf_map_update_elem(fd, &k0, &v, BPF_ANY) != 0)
-                die("icmp forbid failed: " + std::string(strerror(errno)));
-        }
-        else if (is_alias(act, {"let","off"}))
-        {
-            uint8_t v = 0;
-            if (bpf_map_update_elem(fd, &k0, &v, BPF_ANY) != 0)
-                die("icmp let failed: " + std::string(strerror(errno)));
-        }
-        else if (act == "show")
-        {
-            uint8_t v = 0;
-            (void)bpf_map_lookup_elem(fd, &k0, &v);
-            std::cout << "icmp: " << (v ? "forbid" : "let") << "\n";
-        }
-        else
-        {
-            die("etch icmp: action must be forbid|let|show (aliases: on/off)");
+            if (is_alias(act, {"forbid","on"}))
+            {
+                uint8_t v = 1;
+                if (bpf_map_update_elem(b.fds->fd_blk_icmp, &k0, &v, BPF_ANY) != 0)
+                    die(std::string(b.label) + ": icmp forbid failed: " + std::string(strerror(errno)));
+            }
+            else if (is_alias(act, {"let","off"}))
+            {
+                uint8_t v = 0;
+                if (bpf_map_update_elem(b.fds->fd_blk_icmp, &k0, &v, BPF_ANY) != 0)
+                    die(std::string(b.label) + ": icmp let failed: " + std::string(strerror(errno)));
+            }
+            else if (act == "show")
+            {
+                uint8_t v = 0;
+                (void)bpf_map_lookup_elem(b.fds->fd_blk_icmp, &k0, &v);
+                if (show_label) std::cout << "backend=" << b.label << "\n";
+                std::cout << "icmp: " << (v ? "forbid" : "let") << "\n";
+            }
+            else
+            {
+                die("etch icmp: action must be forbid|let|show (aliases: on/off)");
+            }
         }
 
-        close(fd);
         return;
     }
 
     if (act == "show")
     {
-        int fd = open_map_checked(target == "tcp" ? "cs_blk_tcp" : "cs_blk_udp",
-                                BPF_MAP_TYPE_HASH, 2, 1);
-        auto ports = dump_port_set(fd);
-        print_ports_line(target + std::string("_forbidden: "), ports);
-        close(fd);
+        for (auto &b : backends)
+        {
+            int fd = (target == "tcp") ? b.fds->fd_blk_tcp : b.fds->fd_blk_udp;
+            auto ports = dump_port_set(fd);
+            if (show_label) std::cout << "backend=" << b.label << "\n";
+            print_ports_line(target + std::string("_forbidden: "), ports);
+        }
         return;
     }
 
-    if (argc < 3) die("etch " + target + ": missing port");
-    uint16_t port = parse_port(argv[2]);
+    if (args.size() < 3) die("etch " + target + ": missing port");
+    uint16_t port = parse_port(args[2]);
 
-    int fd = open_map_checked(target == "tcp" ? "cs_blk_tcp" : "cs_blk_udp",
-                            BPF_MAP_TYPE_HASH, 2, 1);
+    for (auto &b : backends)
+    {
+        int fd = (target == "tcp") ? b.fds->fd_blk_tcp : b.fds->fd_blk_udp;
 
-    if (is_alias(act, {"forbid","block"}))
-    {
-        uint8_t v = 1;
-        if (bpf_map_update_elem(fd, &port, &v, BPF_ANY) != 0)
-            die(target + " forbid failed: " + std::string(strerror(errno)));
+        if (is_alias(act, {"forbid","block"}))
+        {
+            uint8_t v = 1;
+            if (bpf_map_update_elem(fd, &port, &v, BPF_ANY) != 0)
+                die(std::string(b.label) + ": " + target + " forbid failed: " + std::string(strerror(errno)));
+        }
+        else if (is_alias(act, {"let","unblock"}))
+        {
+            int rc = bpf_map_delete_elem(fd, &port);
+            if (rc != 0 && errno != ENOENT)
+                die(std::string(b.label) + ": " + target + " let failed: " + std::string(strerror(errno)));
+        }
+        else
+        {
+            die("etch " + target + ": action must be forbid|let|show (aliases: block/unblock)");
+        }
     }
-    else if (is_alias(act, {"let","unblock"}))
-    {
-        int rc = bpf_map_delete_elem(fd, &port);
-        if (rc != 0 && errno != ENOENT)
-            die(target + " let failed: " + std::string(strerror(errno)));
-    }
-    else
-    {
-        die("etch " + target + ": action must be forbid|let|show (aliases: block/unblock)");
-    }
-
-    close(fd);
 }
 
 static void cmd_try(int argc, char **argv)
@@ -409,17 +543,18 @@ static void cmd_try(int argc, char **argv)
     std::cout << cs::policy_aware_text(sum);
 }
 
-static void cmd_invoke(int argc, char **argv)
+static void cmd_invoke(const runtime_opts &rt, const std::vector<std::string> &args)
 {
-    (void)argc;
-    (void)argv;
+    (void)rt;
+    if (args.empty()) die("invoke: missing <policy.cbor>");
+    if (args.size() > 1) die("invoke: unknown arg: " + args[1]);
     die("invoke: not implemented yet (Step 3 will apply canonical policy into eBPF maps)");
 }
 
-static void cmd_stepback(int argc, char **argv)
+static void cmd_stepback(const runtime_opts &rt, const std::vector<std::string> &args)
 {
-    (void)argc;
-    (void)argv;
+    (void)rt;
+    if (!args.empty()) die("stepback: unknown arg: " + args[0]);
     die("stepback: not implemented yet (Step 3 will restore previous policy)");
 }
 
@@ -446,14 +581,14 @@ static void usage(const char *argv0)
 {
     std::cerr
         << "Usage:\n"
-        << "  " << argv0 << " etch icmp forbid|let|show\n"
-        << "  " << argv0 << " etch tcp  forbid|let|show [port]\n"
-        << "  " << argv0 << " etch udp  forbid|let|show [port]\n"
-        << "  " << argv0 << " aura\n"
-        << "  " << argv0 << " embers [--watch] [--interval-ms N]\n"
+        << "  " << argv0 << " etch icmp forbid|let|show --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
+        << "  " << argv0 << " etch tcp  forbid|let|show [port] --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
+        << "  " << argv0 << " etch udp  forbid|let|show [port] --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
+        << "  " << argv0 << " aura --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
+        << "  " << argv0 << " embers --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>] [--watch] [--interval-ms N]\n"
         << "  " << argv0 << " try <policy.cbor> [--out <canonical.cbor>]\n"
-        << "  " << argv0 << " invoke <policy.cbor>\n"
-        << "  " << argv0 << " stepback\n"
+        << "  " << argv0 << " invoke <policy.cbor> --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
+        << "  " << argv0 << " stepback --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
         << "  " << argv0 << " aware <policy.cbor>\n";
 }
 
@@ -471,41 +606,30 @@ int main(int argc, char **argv)
 
     if (cmd == "aura")
     {
-        cmd_aura();
+        runtime_opts rt;
+        std::vector<std::string> rest;
+        parse_runtime_opts(argc, argv, 2, rt, rest);
+        if (rt.iface.empty()) die("aura: --iface is required");
+        if (!rest.empty()) die("unknown aura arg: " + rest[0]);
+        cmd_aura(rt);
         return 0;
     }
     if (cmd == "embers")
     {
-        bool watch = false;
-        int interval_ms = 1000;
-
-        for (int i = 2; i < argc; ++i)
-        {
-            std::string a = argv[i];
-            if (a == "--watch") watch = true;
-            else if (a == "--interval-ms")
-            {
-                if (i + 1 >= argc) die("--interval-ms requires value");
-                interval_ms = atoi(argv[++i]);
-                if (interval_ms < 10) interval_ms = 10;
-            }
-            else
-            {
-                die("unknown embers arg: " + a);
-            }
-        }
-
-        cmd_embers(watch, interval_ms);
+        runtime_opts rt;
+        std::vector<std::string> rest;
+        parse_runtime_opts(argc, argv, 2, rt, rest);
+        if (rt.iface.empty()) die("embers: --iface is required");
+        cmd_embers(rt, rest);
         return 0;
     }
     if (cmd == "etch")
     {
-        if (argc < 4)
-        {
-            usage(argv[0]);
-            return 2;
-        }
-        cmd_etch(argc - 2, argv + 2);
+        runtime_opts rt;
+        std::vector<std::string> rest;
+        parse_runtime_opts(argc, argv, 2, rt, rest);
+        if (rt.iface.empty()) die("etch: --iface is required");
+        cmd_etch(rt, rest);
         return 0;
     }
 
@@ -521,17 +645,20 @@ int main(int argc, char **argv)
     }
     if (cmd == "invoke")
     {
-        if (argc < 3)
-        {
-            usage(argv[0]);
-            return 2;
-        }
-        cmd_invoke(argc - 2, argv + 2);
+        runtime_opts rt;
+        std::vector<std::string> rest;
+        parse_runtime_opts(argc, argv, 2, rt, rest);
+        if (rt.iface.empty()) die("invoke: --iface is required");
+        cmd_invoke(rt, rest);
         return 0;
     }
     if (cmd == "stepback")
     {
-        cmd_stepback(argc - 2, argv + 2);
+        runtime_opts rt;
+        std::vector<std::string> rest;
+        parse_runtime_opts(argc, argv, 2, rt, rest);
+        if (rt.iface.empty()) die("stepback: --iface is required");
+        cmd_stepback(rt, rest);
         return 0;
     }
     if (cmd == "aware")

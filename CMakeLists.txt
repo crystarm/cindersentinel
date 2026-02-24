@@ -21,6 +21,10 @@ find_package(OpenSSL REQUIRED)
 
 add_executable(cindersentineld
     src/cindersentineld.cpp
+    src/policy/hash.cpp
+    src/policy/state_store.cpp
+    src/policy/maps_pins.cpp
+    src/policy/apply.cpp
 )
 
 target_include_directories(cindersentineld PRIVATE
@@ -33,6 +37,7 @@ target_compile_options(cindersentineld PRIVATE
 
 target_link_libraries(cindersentineld PRIVATE
     ${LIBBPF_LIBRARIES}
+    OpenSSL::Crypto
     elf
     z
 )

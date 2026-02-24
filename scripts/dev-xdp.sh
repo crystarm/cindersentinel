@@ -43,4 +43,4 @@ printf '  ip netns exec %s ping -c 2 %s\n' "${NS_A}" "${IP_B_PLAIN}"
 sudo -E ip netns exec "${NS_A}" ping -c 2 "${IP_B_PLAIN}" || true
 
 log_info "counters:"
-sudo -E "${CLI_BIN}" embers --watch --interval-ms 500
+sudo -E "${CLI_BIN}" embers --iface "${IFACE_A}" --backend xdp --watch --interval-ms 500

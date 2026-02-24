@@ -61,11 +61,11 @@ case "${cmd}" in
     ;;
 
   counters)
-    sudo -E "${CLI_BIN}" embers --watch --interval-ms 1000
+    sudo -E "${CLI_BIN}" embers --iface "${IFACE_A}" --backend tc --watch --interval-ms 1000
     ;;
 
   icmp|tcp|udp)
-    sudo -E "${CLI_BIN}" etch "${cmd}" "$@"
+    sudo -E "${CLI_BIN}" etch "${cmd}" "$@" --iface "${IFACE_A}" --backend tc
     ;;
 
   -h|--help|"")
