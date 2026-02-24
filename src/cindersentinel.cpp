@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -17,6 +18,9 @@
 
 #include "policy/scheme.h"
 #include "policy/maps_pins.h"
+#include "policy/hash.h"
+#include "policy/state_store.h"
+#include "policy/apply.h"
 
 static void die(const std::string &msg);
 
@@ -89,6 +93,7 @@ struct runtime_opts
     std::string iface;
     runtime_backend backend = runtime_backend::all;
     std::string pin_base = "/sys/fs/bpf/cindersentinel";
+    std::string state_root = "/var/lib/cindersentinel";
 };
 
 static bool parse_backend_value(const std::string &s, runtime_backend &out)
@@ -137,6 +142,11 @@ static void parse_runtime_opts(int argc, char **argv, int start,
             if (i + 1 >= argc) die("--pin-base requires value");
             out.pin_base = argv[++i];
         }
+        else if (a == "--state-root")
+        {
+            if (i + 1 >= argc) die("--state-root requires value");
+            out.state_root = argv[++i];
+        }
         else
         {
             rest.push_back(a);
@@ -145,6 +155,96 @@ static void parse_runtime_opts(int argc, char **argv, int start,
 }
 
 
+
+static uint64_t now_ms()
+{
+    using namespace std::chrono;
+    return (uint64_t)duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+static void apply_summary_to_maps(const cs::maps_fds &maps,
+                                  const cs::policy_summary &sum,
+                                  const char *ctx)
+{
+    cs::apply_limits lim;
+    cs::apply_error ae;
+    cs::runtime_state old_state;
+    cs::runtime_state new_state;
+
+    if (cs::read_runtime_state(maps, old_state, ae) != 0)
+        die(std::string(ctx) + ": " + ae.msg);
+    if (cs::summary_to_runtime_state(sum, new_state, lim, ae) != 0)
+        die(std::string(ctx) + ": " + ae.msg);
+    if (cs::apply_delta(maps, old_state, new_state, ae) != 0)
+        die(std::string(ctx) + ": " + ae.msg);
+}
+
+struct backend_view
+{
+    const char *label;
+    const cs::maps_fds *fds;
+};
+
+static bool runtime_state_equal(const cs::runtime_state &a, const cs::runtime_state &b)
+{
+    return a.icmp_forbid == b.icmp_forbid &&
+           a.tcp_forbidden_ports == b.tcp_forbidden_ports &&
+           a.udp_forbidden_ports == b.udp_forbidden_ports;
+}
+
+static void sync_runtime_to_state(const runtime_opts &rt,
+                                  const std::vector<backend_view> &backends,
+                                  const std::string &source)
+{
+    if (backends.empty()) die("sync: no backends available");
+
+    cs::state_store_opts so;
+    so.state_root = rt.state_root;
+    cs::state_store store(so, rt.iface);
+
+    cs::state_error se;
+    if (store.ensure_dirs(se) != 0) die("state: " + se.msg);
+
+    cs::state_lock lk;
+    if (store.lock_exclusive(lk, se) != 0) die("state: " + se.msg);
+
+    cs::apply_error ae;
+    cs::runtime_state st;
+    if (cs::read_runtime_state(*backends[0].fds, st, ae) != 0)
+        die("state: " + ae.msg);
+
+    for (size_t i = 1; i < backends.size(); ++i)
+    {
+        cs::runtime_state other;
+        if (cs::read_runtime_state(*backends[i].fds, other, ae) != 0)
+            die("state: " + ae.msg);
+        if (!runtime_state_equal(st, other))
+            die("state: backend states differ; refusing to sync");
+    }
+
+    std::vector<uint8_t> canon;
+    cs::policy_summary sum;
+    if (cs::build_policy_from_runtime(st, canon, sum, ae) != 0)
+        die("state: " + ae.msg);
+
+    std::string hash = cs::sha256_hex(canon);
+    if (store.store_policy_blob(hash, canon, se) != 0) die("state: " + se.msg);
+
+    std::vector<std::string> hist;
+    if (store.read_history(hist, se) != 0) die("state: " + se.msg);
+    store.history_push(hist, hash);
+    if (store.write_history(hist, se) != 0) die("state: " + se.msg);
+
+    cs::active_info ai;
+    ai.sha256 = hash;
+    ai.kind = sum.kind;
+    ai.v = sum.v;
+    ai.updated_at_ms = now_ms();
+    ai.source = source;
+    if (store.write_active(ai, se) != 0) die("state: " + se.msg);
+
+    std::cout << "synced: " << hash << "\n";
+}
 
 static bool open_pinned_maps_for_backend(const runtime_opts &rt,
                                          cs::cs_backend backend,
@@ -385,6 +485,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
     if (args.size() < 2) die("etch: missing action");
 
     std::string act = args[1];
+    bool mutated = false;
 
     cs::maps_fds tc_fds;
     cs::maps_fds xdp_fds;
@@ -435,12 +536,14 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
                 uint8_t v = 1;
                 if (bpf_map_update_elem(b.fds->fd_blk_icmp, &k0, &v, BPF_ANY) != 0)
                     die(std::string(b.label) + ": icmp forbid failed: " + std::string(strerror(errno)));
+                mutated = true;
             }
             else if (is_alias(act, {"let","off"}))
             {
                 uint8_t v = 0;
                 if (bpf_map_update_elem(b.fds->fd_blk_icmp, &k0, &v, BPF_ANY) != 0)
                     die(std::string(b.label) + ": icmp let failed: " + std::string(strerror(errno)));
+                mutated = true;
             }
             else if (act == "show")
             {
@@ -455,6 +558,13 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             }
         }
 
+        if (mutated)
+        {
+            std::vector<backend_view> views;
+            views.reserve(backends.size());
+            for (auto &b : backends) views.push_back({b.label, b.fds});
+            sync_runtime_to_state(rt, views, "etch");
+        }
         return;
     }
 
@@ -482,17 +592,27 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             uint8_t v = 1;
             if (bpf_map_update_elem(fd, &port, &v, BPF_ANY) != 0)
                 die(std::string(b.label) + ": " + target + " forbid failed: " + std::string(strerror(errno)));
+            mutated = true;
         }
         else if (is_alias(act, {"let","unblock"}))
         {
             int rc = bpf_map_delete_elem(fd, &port);
             if (rc != 0 && errno != ENOENT)
                 die(std::string(b.label) + ": " + target + " let failed: " + std::string(strerror(errno)));
+            mutated = true;
         }
         else
         {
             die("etch " + target + ": action must be forbid|let|show (aliases: block/unblock)");
         }
+    }
+
+    if (mutated)
+    {
+        std::vector<backend_view> views;
+        views.reserve(backends.size());
+        for (auto &b : backends) views.push_back({b.label, b.fds});
+        sync_runtime_to_state(rt, views, "etch");
     }
 }
 
@@ -545,17 +665,152 @@ static void cmd_try(int argc, char **argv)
 
 static void cmd_invoke(const runtime_opts &rt, const std::vector<std::string> &args)
 {
-    (void)rt;
     if (args.empty()) die("invoke: missing <policy.cbor>");
     if (args.size() > 1) die("invoke: unknown arg: " + args[1]);
-    die("invoke: not implemented yet (Step 3 will apply canonical policy into eBPF maps)");
+
+    std::string in_path = args[0];
+    auto bytes = read_file_all(in_path);
+
+    std::vector<uint8_t> canon;
+    cs::policy_summary sum;
+    cs::policy_error pe;
+    if (!cs::policy_parse_validate_canonical(bytes, canon, sum, pe))
+        die("policy invalid: " + pe.msg);
+
+    std::string hash = cs::sha256_hex(canon);
+
+    cs::state_store_opts so;
+    so.state_root = rt.state_root;
+    cs::state_store store(so, rt.iface);
+
+    cs::state_error se;
+    if (store.ensure_dirs(se) != 0) die("state: " + se.msg);
+
+    cs::state_lock lk;
+    if (store.lock_exclusive(lk, se) != 0) die("state: " + se.msg);
+
+    if (store.store_policy_blob(hash, canon, se) != 0) die("state: " + se.msg);
+
+    cs::maps_fds tc_fds;
+    cs::maps_fds xdp_fds;
+    bool have_tc = false;
+    bool have_xdp = false;
+    std::string err_tc;
+    std::string err_xdp;
+
+    if (rt.backend == runtime_backend::tc || rt.backend == runtime_backend::all)
+        have_tc = open_pinned_maps_for_backend(rt, cs::cs_backend::TC, tc_fds, err_tc);
+    if (rt.backend == runtime_backend::xdp || rt.backend == runtime_backend::all)
+        have_xdp = open_pinned_maps_for_backend(rt, cs::cs_backend::XDP, xdp_fds, err_xdp);
+
+    if (rt.backend == runtime_backend::tc)
+    {
+        if (!have_tc) die("invoke: " + err_tc);
+    }
+    else if (rt.backend == runtime_backend::xdp)
+    {
+        if (!have_xdp) die("invoke: " + err_xdp);
+    }
+    else
+    {
+        if (!have_tc || !have_xdp)
+            die("invoke: backend=all requires pinned maps for both tc and xdp");
+    }
+
+    if (have_tc) apply_summary_to_maps(tc_fds, sum, "invoke(tc)");
+    if (have_xdp) apply_summary_to_maps(xdp_fds, sum, "invoke(xdp)");
+
+    std::vector<std::string> hist;
+    if (store.read_history(hist, se) != 0) die("state: " + se.msg);
+    store.history_push(hist, hash);
+    if (store.write_history(hist, se) != 0) die("state: " + se.msg);
+
+    cs::active_info ai;
+    ai.sha256 = hash;
+    ai.kind = sum.kind;
+    ai.v = sum.v;
+    ai.updated_at_ms = now_ms();
+    ai.source = "invoke";
+    if (store.write_active(ai, se) != 0) die("state: " + se.msg);
+
+    std::cout << "OK: " << hash << "\n";
+    std::cout << cs::policy_aware_text(sum);
 }
 
 static void cmd_stepback(const runtime_opts &rt, const std::vector<std::string> &args)
 {
-    (void)rt;
     if (!args.empty()) die("stepback: unknown arg: " + args[0]);
-    die("stepback: not implemented yet (Step 3 will restore previous policy)");
+
+    cs::state_store_opts so;
+    so.state_root = rt.state_root;
+    cs::state_store store(so, rt.iface);
+
+    cs::state_error se;
+    if (store.ensure_dirs(se) != 0) die("state: " + se.msg);
+
+    cs::state_lock lk;
+    if (store.lock_exclusive(lk, se) != 0) die("state: " + se.msg);
+
+    std::vector<std::string> hist;
+    if (store.read_history(hist, se) != 0) die("state: " + se.msg);
+    if (store.history_pop(hist, se) != 0) die("stepback: " + se.msg);
+
+    std::string target = hist.back();
+
+    std::vector<uint8_t> bytes;
+    if (store.load_policy_blob(target, bytes, se) != 0) die("state: " + se.msg);
+
+    std::vector<uint8_t> canon;
+    cs::policy_summary sum;
+    cs::policy_error pe;
+    if (!cs::policy_parse_validate_canonical(bytes, canon, sum, pe))
+        die("policy invalid: " + pe.msg);
+
+    std::string hash = cs::sha256_hex(canon);
+    if (hash != target)
+        die("stepback: policy hash mismatch");
+
+    cs::maps_fds tc_fds;
+    cs::maps_fds xdp_fds;
+    bool have_tc = false;
+    bool have_xdp = false;
+    std::string err_tc;
+    std::string err_xdp;
+
+    if (rt.backend == runtime_backend::tc || rt.backend == runtime_backend::all)
+        have_tc = open_pinned_maps_for_backend(rt, cs::cs_backend::TC, tc_fds, err_tc);
+    if (rt.backend == runtime_backend::xdp || rt.backend == runtime_backend::all)
+        have_xdp = open_pinned_maps_for_backend(rt, cs::cs_backend::XDP, xdp_fds, err_xdp);
+
+    if (rt.backend == runtime_backend::tc)
+    {
+        if (!have_tc) die("stepback: " + err_tc);
+    }
+    else if (rt.backend == runtime_backend::xdp)
+    {
+        if (!have_xdp) die("stepback: " + err_xdp);
+    }
+    else
+    {
+        if (!have_tc || !have_xdp)
+            die("stepback: backend=all requires pinned maps for both tc and xdp");
+    }
+
+    if (have_tc) apply_summary_to_maps(tc_fds, sum, "stepback(tc)");
+    if (have_xdp) apply_summary_to_maps(xdp_fds, sum, "stepback(xdp)");
+
+    if (store.write_history(hist, se) != 0) die("state: " + se.msg);
+
+    cs::active_info ai;
+    ai.sha256 = hash;
+    ai.kind = sum.kind;
+    ai.v = sum.v;
+    ai.updated_at_ms = now_ms();
+    ai.source = "stepback";
+    if (store.write_active(ai, se) != 0) die("state: " + se.msg);
+
+    std::cout << "OK: " << hash << "\n";
+    std::cout << cs::policy_aware_text(sum);
 }
 
 static void cmd_aware(int argc, char **argv)
@@ -587,8 +842,8 @@ static void usage(const char *argv0)
         << "  " << argv0 << " aura --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
         << "  " << argv0 << " embers --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>] [--watch] [--interval-ms N]\n"
         << "  " << argv0 << " try <policy.cbor> [--out <canonical.cbor>]\n"
-        << "  " << argv0 << " invoke <policy.cbor> --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
-        << "  " << argv0 << " stepback --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
+        << "  " << argv0 << " invoke <policy.cbor> --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>] [--state-root <path>]\n"
+        << "  " << argv0 << " stepback --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>] [--state-root <path>]\n"
         << "  " << argv0 << " aware <policy.cbor>\n";
 }
 

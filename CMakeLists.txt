@@ -21,6 +21,8 @@ find_package(OpenSSL REQUIRED)
 
 add_executable(cindersentineld
     src/cindersentineld.cpp
+    src/policy/cbor.cpp
+    src/policy/scheme.cpp
     src/policy/hash.cpp
     src/policy/state_store.cpp
     src/policy/maps_pins.cpp
@@ -35,12 +37,21 @@ target_compile_options(cindersentineld PRIVATE
     ${LIBBPF_CFLAGS_OTHER}
 )
 
-target_link_libraries(cindersentineld PRIVATE
-    ${LIBBPF_LIBRARIES}
-    OpenSSL::Crypto
-    elf
-    z
-)
+if(TARGET OpenSSL::Crypto)
+  target_link_libraries(cindersentineld PRIVATE
+      ${LIBBPF_LIBRARIES}
+      OpenSSL::Crypto
+      elf
+      z
+  )
+else()
+  target_link_libraries(cindersentineld PRIVATE
+      ${LIBBPF_LIBRARIES}
+      crypto
+      elf
+      z
+  )
+endif()
 
 add_executable(cindersentinel
     src/cindersentinel.cpp
@@ -60,12 +71,21 @@ target_compile_options(cindersentinel PRIVATE
     ${LIBBPF_CFLAGS_OTHER}
 )
 
-target_link_libraries(cindersentinel PRIVATE
-    ${LIBBPF_LIBRARIES}
-    OpenSSL::Crypto
-    elf
-    z
-)
+if(TARGET OpenSSL::Crypto)
+  target_link_libraries(cindersentinel PRIVATE
+      ${LIBBPF_LIBRARIES}
+      OpenSSL::Crypto
+      elf
+      z
+  )
+else()
+  target_link_libraries(cindersentinel PRIVATE
+      ${LIBBPF_LIBRARIES}
+      crypto
+      elf
+      z
+  )
+endif()
 
 execute_process(
   COMMAND dpkg-architecture -qDEB_HOST_MULTIARCH
