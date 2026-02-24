@@ -3,6 +3,8 @@ logs*/
 
 build*/
 
+docs*/
+
 .x
 
 *.cbor
