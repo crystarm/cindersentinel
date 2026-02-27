@@ -124,6 +124,45 @@ else()
   )
 endif()
 
+add_executable(cindersentinel-cbor-fuzzer
+    fuzzer/cbor/cbor_fuzzer.cpp
+    aegis/src/aegis_c_api.cpp
+    src/policy/cbor.cpp
+    src/policy/scheme.cpp
+    src/policy/apply.cpp
+)
+
+target_include_directories(cindersentinel-cbor-fuzzer PRIVATE
+    ${LIBBPF_INCLUDE_DIRS}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/aegis/src
+)
+
+target_compile_options(cindersentinel-cbor-fuzzer PRIVATE
+    ${LIBBPF_CFLAGS_OTHER}
+    -fsanitize=fuzzer,address
+)
+
+target_link_options(cindersentinel-cbor-fuzzer PRIVATE
+    -fsanitize=fuzzer,address
+)
+
+if(TARGET OpenSSL::Crypto)
+  target_link_libraries(cindersentinel-cbor-fuzzer PRIVATE
+      ${LIBBPF_LIBRARIES}
+      OpenSSL::Crypto
+      elf
+      z
+  )
+else()
+  target_link_libraries(cindersentinel-cbor-fuzzer PRIVATE
+      ${LIBBPF_LIBRARIES}
+      crypto
+      elf
+      z
+  )
+endif()
+
 execute_process(
   COMMAND dpkg-architecture -qDEB_HOST_MULTIARCH
   OUTPUT_VARIABLE DEB_MULTIARCH
