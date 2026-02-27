@@ -5,7 +5,7 @@ build*/
 
 docs*/
 
-.x
+.runenv/
 
 *.cbor
 *.cbor.tmp
