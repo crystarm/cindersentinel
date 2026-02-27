@@ -77,9 +77,9 @@ static int expand_ranges(const std::vector<port_range> &rs,
     uint64_t cnt = 0;
     for (auto r : rs)
     {
-        if (r.hi < r.lo) return set_err(err, "bad port range");
+        if (r.hi < r.lo) return set_err(err, "invalid port range: hi < lo");
         cnt += (uint64_t)r.hi - (uint64_t)r.lo + 1;
-        if (cnt > lim) return set_err(err, "too many ports to expand");
+        if (cnt > lim) return set_err(err, "policy too wide: expanded ports exceed per-proto limit");
     }
 
     out.reserve((size_t)cnt);
@@ -112,7 +112,7 @@ int summary_to_runtime_state(const policy_summary &sum,
 
     if (st.tcp_forbidden_ports.size() + st.udp_forbidden_ports.size() > lim.max_total_ops)
     {
-        return set_err(err, "policy too wide (ops limit)");
+        return set_err(err, "policy too wide: total ops exceed limit");
     }
 
     out = std::move(st);

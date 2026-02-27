@@ -72,7 +72,10 @@ static int open_map_checked(const std::string &path,
         std::string msg = "unexpected map shape at " + path +
             ": type=" + std::to_string(info.type) +
             " key=" + std::to_string(info.key_size) +
-            " value=" + std::to_string(info.value_size);
+            " value=" + std::to_string(info.value_size) +
+            " (expected type=" + std::to_string(type) +
+            " key=" + std::to_string(key_sz) +
+            " value=" + std::to_string(val_sz) + ")";
         ::close(fd);
         return set_err(err, msg);
     }
@@ -81,7 +84,10 @@ static int open_map_checked(const std::string &path,
     {
         std::string msg = "unexpected max_entries at " + path +
             ": " + std::to_string(info.max_entries) +
-            " (expected " + std::to_string(max_entries) + ")";
+            " (expected " + std::to_string(max_entries) +
+            ", type=" + std::to_string(info.type) +
+            " key=" + std::to_string(info.key_size) +
+            " value=" + std::to_string(info.value_size) + ")";
         ::close(fd);
         return set_err(err, msg);
     }

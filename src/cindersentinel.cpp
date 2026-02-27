@@ -753,6 +753,23 @@ static void cmd_stepback(const runtime_opts &rt, const std::vector<std::string> 
 
     std::vector<std::string> hist;
     if (store.read_history(hist, se) != 0) die("state: " + se.msg);
+
+    cs::active_info cur;
+    int ar = store.read_active(cur, se);
+    if (ar == 0)
+    {
+        if (hist.empty() || hist.back() != cur.sha256)
+            die("stepback: history does not match active");
+    }
+    else if (ar != -ENOENT)
+    {
+        die("state: " + se.msg);
+    }
+    else if (!hist.empty())
+    {
+        die("stepback: history exists but active is missing");
+    }
+
     if (store.history_pop(hist, se) != 0) die("stepback: " + se.msg);
 
     std::string target = hist.back();

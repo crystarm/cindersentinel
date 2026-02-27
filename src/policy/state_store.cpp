@@ -276,12 +276,36 @@ int state_store::read_active(active_info &out, state_error &err) const
         else if (k == "source") a.source = v;
     }
 
+    if (a.sha256.empty())
+    {
+        return set_err(err, "active missing sha256");
+    }
+
+    std::string blob = policies_dir() + "/" + a.sha256 + ".cbor";
+    struct stat st;
+    if (::stat(blob.c_str(), &st) != 0)
+    {
+        return set_err(err, "active sha256 blob not found: " + blob);
+    }
+
     out = std::move(a);
     return 0;
 }
 
 int state_store::write_active(const active_info &in, state_error &err) const
 {
+    if (in.sha256.empty())
+    {
+        return set_err(err, "active missing sha256");
+    }
+
+    std::string blob = policies_dir() + "/" + in.sha256 + ".cbor";
+    struct stat st;
+    if (::stat(blob.c_str(), &st) != 0)
+    {
+        return set_err(err, "active sha256 blob not found: " + blob);
+    }
+
     std::ostringstream oss;
     oss << "sha256=" << in.sha256 << "\n";
     if (!in.kind.empty()) oss << "kind=" << in.kind << "\n";
