@@ -38,6 +38,17 @@ static std::string trim_copy(const std::string &s)
     return s.substr(b, e - b);
 }
 
+static std::string normalize_error(const std::string &s)
+{
+    std::string t = trim_copy(s);
+    const std::string prefix = "aegis: ";
+    if (t.rfind(prefix, 0) == 0)
+    {
+        t = t.substr(prefix.size());
+    }
+    return t;
+}
+
 static std::string hex_dump(const uint8_t *data, size_t len)
 {
     static const char *hexd = "0123456789abcdef";
@@ -129,6 +140,8 @@ static AdaResult run_ada_validator(const uint8_t *data, size_t len, int timeout_
         const char *env_bin = std::getenv("CINDERSENTINEL_AEGIS");
         const char *bin = (env_bin && *env_bin) ? env_bin : "cindersentinel-aegis";
         ::execlp(bin, bin, tmp, (char *)nullptr);
+        const char *msg = "aegis: exec failed";
+        ::write(STDERR_FILENO, msg, std::strlen(msg));
         _exit(127);
     }
 
@@ -217,6 +230,10 @@ static AdaResult run_ada_validator(const uint8_t *data, size_t len, int timeout_
             res.exit_code = 128 + WTERMSIG(status);
         }
         res.ok = (res.exit_code == 0);
+        if (res.exit_code == 127 && trim_copy(res.output).empty())
+        {
+            res.output = "aegis: exec failed";
+        }
     }
 
     return res;
@@ -260,6 +277,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         crash_mismatch("ada timeout", cpp_err, ada, data, size);
     }
 
+    if (ada.exit_code == 127)
+    {
+        crash_mismatch("ada exec failed", cpp_err, ada, data, size);
+    }
+
     if (cpp_ok != ada.ok)
     {
         crash_mismatch("success mismatch", cpp_err, ada, data, size);
@@ -267,8 +289,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
     if (!cpp_ok)
     {
-        std::string ada_err = trim_copy(ada.output);
-        std::string cpp_err_trim = trim_copy(cpp_err);
+        std::string ada_err = normalize_error(ada.output);
+        std::string cpp_err_trim = normalize_error(cpp_err);
         if (ada_err != cpp_err_trim)
         {
             crash_mismatch("error text mismatch", cpp_err, ada, data, size);

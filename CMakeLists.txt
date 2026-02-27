@@ -124,6 +124,13 @@ else()
   )
 endif()
 
+option(ENABLE_FUZZERS "Build fuzzers" OFF)
+
+if(ENABLE_FUZZERS)
+  if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "Fuzzers require clang/clang++ (CMAKE_CXX_COMPILER_ID=Clang)")
+  endif()
+
 add_executable(cindersentinel-cbor-fuzzer
     fuzzer/cbor/cbor_fuzzer.cpp
     aegis/src/aegis_c_api.cpp
@@ -161,6 +168,7 @@ else()
       elf
       z
   )
+endif()
 endif()
 
 execute_process(
