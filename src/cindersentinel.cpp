@@ -3,6 +3,7 @@
 
 #include <unistd.h>
 #include <signal.h>
+#include <sys/wait.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -44,6 +45,75 @@ static void write_file_all(const std::string &path, const std::vector<uint8_t> &
     if (!f) die("cannot write: " + path);
     if (!b.empty()) f.write((const char *)b.data(), (std::streamsize)b.size());
     if (!f) die("write failed: " + path);
+}
+
+static int write_all_fd(int fd, const uint8_t *p, size_t n)
+{
+    while (n)
+    {
+        ssize_t rc = ::write(fd, p, n);
+        if (rc < 0)
+        {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        p += (size_t)rc;
+        n -= (size_t)rc;
+    }
+    return 0;
+}
+
+static void run_aegis_gate(const std::vector<uint8_t> &canon)
+{
+    char tmp[] = "/tmp/cindersentinel-aegis.XXXXXX";
+    int fd = ::mkstemp(tmp);
+    if (fd < 0) die("aegis: mkstemp failed: " + std::string(strerror(errno)));
+
+    if (!canon.empty() && write_all_fd(fd, canon.data(), canon.size()) != 0)
+    {
+        int e = errno;
+        ::close(fd);
+        ::unlink(tmp);
+        errno = e;
+        die("aegis: write failed: " + std::string(strerror(errno)));
+    }
+
+    if (::close(fd) != 0)
+    {
+        int e = errno;
+        ::unlink(tmp);
+        errno = e;
+        die("aegis: close failed: " + std::string(strerror(errno)));
+    }
+
+    pid_t pid = ::fork();
+    if (pid < 0)
+    {
+        ::unlink(tmp);
+        die("aegis: fork failed: " + std::string(strerror(errno)));
+    }
+    if (pid == 0)
+    {
+        const char *env_bin = std::getenv("CINDERSENTINEL_AEGIS");
+        const char *bin = (env_bin && *env_bin) ? env_bin : "cindersentinel-aegis";
+        ::execlp(bin, bin, tmp, (char *)nullptr);
+        _exit(127);
+    }
+
+    int status = 0;
+    if (::waitpid(pid, &status, 0) < 0)
+    {
+        ::unlink(tmp);
+        die("aegis: waitpid failed: " + std::string(strerror(errno)));
+    }
+
+    ::unlink(tmp);
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    {
+        int code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+        die("aegis: gate failed (exit " + std::to_string(code) + ")");
+    }
 }
 
 static volatile sig_atomic_t g_stop = 0;
@@ -644,6 +714,8 @@ static void cmd_try(int argc, char **argv)
     if (!cs::policy_parse_validate_canonical(bytes, canon, sum, err))
         die("policy invalid: " + err.msg);
 
+    run_aegis_gate(canon);
+
     bool same = (bytes == canon);
 
     if (!out_path.empty())
@@ -663,6 +735,25 @@ static void cmd_try(int argc, char **argv)
     std::cout << cs::policy_aware_text(sum);
 }
 
+static void cmd_gate(int argc, char **argv)
+{
+    if (argc < 1) die("gate: missing <policy.cbor>");
+    if (argc > 1) die("gate: unknown arg: " + std::string(argv[1]));
+
+    std::string in_path = argv[0];
+    auto bytes = read_file_all(in_path);
+
+    std::vector<uint8_t> canon;
+    cs::policy_summary sum;
+    cs::policy_error err;
+    if (!cs::policy_parse_validate_canonical(bytes, canon, sum, err))
+        die("policy invalid: " + err.msg);
+
+    run_aegis_gate(canon);
+
+    std::cout << "OK (gate)\n";
+}
+
 static void cmd_invoke(const runtime_opts &rt, const std::vector<std::string> &args)
 {
     if (args.empty()) die("invoke: missing <policy.cbor>");
@@ -676,6 +767,8 @@ static void cmd_invoke(const runtime_opts &rt, const std::vector<std::string> &a
     cs::policy_error pe;
     if (!cs::policy_parse_validate_canonical(bytes, canon, sum, pe))
         die("policy invalid: " + pe.msg);
+
+    run_aegis_gate(canon);
 
     std::string hash = cs::sha256_hex(canon);
 
@@ -859,6 +952,7 @@ static void usage(const char *argv0)
         << "  " << argv0 << " aura --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
         << "  " << argv0 << " embers --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>] [--watch] [--interval-ms N]\n"
         << "  " << argv0 << " try <policy.cbor> [--out <canonical.cbor>]\n"
+        << "  " << argv0 << " gate <policy.cbor>\n"
         << "  " << argv0 << " invoke <policy.cbor> --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>] [--state-root <path>]\n"
         << "  " << argv0 << " stepback --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>] [--state-root <path>]\n"
         << "  " << argv0 << " aware <policy.cbor>\n";
@@ -913,6 +1007,16 @@ int main(int argc, char **argv)
             return 2;
         }
         cmd_try(argc - 2, argv + 2);
+        return 0;
+    }
+    if (cmd == "gate")
+    {
+        if (argc < 3)
+        {
+            usage(argv[0]);
+            return 2;
+        }
+        cmd_gate(argc - 2, argv + 2);
         return 0;
     }
     if (cmd == "invoke")

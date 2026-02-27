@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(cindersentinel LANGUAGES C CXX)
 
+# NOTE: aegis (Ada gate) build is optional and will be added once GNAT is available.
+# The binary will be named cindersentinel-aegis.
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -80,6 +83,40 @@ if(TARGET OpenSSL::Crypto)
   )
 else()
   target_link_libraries(cindersentinel PRIVATE
+      ${LIBBPF_LIBRARIES}
+      crypto
+      elf
+      z
+  )
+endif()
+
+add_executable(cindersentinel-aegis
+    aegis/src/aegis_c_api.cpp
+    aegis/src/aegis_validate.cpp
+    src/policy/cbor.cpp
+    src/policy/scheme.cpp
+    src/policy/apply.cpp
+)
+
+target_include_directories(cindersentinel-aegis PRIVATE
+    ${LIBBPF_INCLUDE_DIRS}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/aegis/src
+)
+
+target_compile_options(cindersentinel-aegis PRIVATE
+    ${LIBBPF_CFLAGS_OTHER}
+)
+
+if(TARGET OpenSSL::Crypto)
+  target_link_libraries(cindersentinel-aegis PRIVATE
+      ${LIBBPF_LIBRARIES}
+      OpenSSL::Crypto
+      elf
+      z
+  )
+else()
+  target_link_libraries(cindersentinel-aegis PRIVATE
       ${LIBBPF_LIBRARIES}
       crypto
       elf
