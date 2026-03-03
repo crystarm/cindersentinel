@@ -88,7 +88,8 @@ static bool decode_any(const uint8_t *&p, const uint8_t *end,
         }
 
         if (v > (uint64_t)INT64_MAX) return fail(err, "negative integer overflow");
-        out = cbor_value::make_nint(-(int64_t)(v + 1));
+        int64_t x = -(int64_t)v - 1;
+        out = cbor_value::make_nint(x);
         return true;
     }
 

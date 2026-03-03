@@ -185,9 +185,9 @@ static bool validate_rule(const cbor_value &rule,
 
     if (proto == CSP_ICMP)
     {
-        if (v_dports && !(v_dports->t == cbor_type::ARRAY && v_dports->arr.empty()))
+        if (v_dports)
         {
-            return fail(err, "icmp rule must not have dports");
+            return fail(err, "icmp rule must not have dports (field must be absent)");
         }
 
         icmp_forbid = true;

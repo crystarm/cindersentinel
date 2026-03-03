@@ -110,10 +110,10 @@ int open_pinned_maps(const maps_pins_opts &opt, maps_fds &out, maps_error &err)
     rc = open_map_checked(dir + "/cs_blk_icmp", BPF_MAP_TYPE_ARRAY, 4, 1, 1, out.fd_blk_icmp, err);
     if (rc != 0) { out.close(); return rc; }
 
-    rc = open_map_checked(dir + "/cs_blk_tcp", BPF_MAP_TYPE_ARRAY, 4, 1, 65536, out.fd_blk_tcp, err);
+    rc = open_map_checked(dir + "/cs_blk_tcp", BPF_MAP_TYPE_ARRAY, 4, 1, CS_PORT_MAP_MAX, out.fd_blk_tcp, err);
     if (rc != 0) { out.close(); return rc; }
 
-    rc = open_map_checked(dir + "/cs_blk_udp", BPF_MAP_TYPE_ARRAY, 4, 1, 65536, out.fd_blk_udp, err);
+    rc = open_map_checked(dir + "/cs_blk_udp", BPF_MAP_TYPE_ARRAY, 4, 1, CS_PORT_MAP_MAX, out.fd_blk_udp, err);
     if (rc != 0) { out.close(); return rc; }
 
     return 0;
