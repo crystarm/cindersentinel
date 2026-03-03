@@ -251,10 +251,16 @@ static std::string trim(const std::string &s)
 
 int state_store::read_active(active_info &out, state_error &err) const
 {
+    struct stat st;
+    if (::stat(active_path().c_str(), &st) != 0)
+    {
+        if (errno == ENOENT) return -ENOENT;
+        return set_err_errno(err, "stat active failed");
+    }
+
     std::ifstream f(active_path());
     if (!f)
     {
-        if (errno == ENOENT) return -ENOENT;
         return set_err(err, "cannot open active");
     }
 
@@ -320,10 +326,16 @@ int state_store::write_active(const active_info &in, state_error &err) const
 int state_store::read_history(std::vector<std::string> &out, state_error &err) const
 {
     out.clear();
+    struct stat st;
+    if (::stat(history_path().c_str(), &st) != 0)
+    {
+        if (errno == ENOENT) return 0;
+        return set_err_errno(err, "stat history failed");
+    }
+
     std::ifstream f(history_path());
     if (!f)
     {
-        if (errno == ENOENT) return 0;
         return set_err(err, "cannot open history");
     }
 

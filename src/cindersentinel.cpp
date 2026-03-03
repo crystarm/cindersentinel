@@ -96,7 +96,11 @@ static void run_aegis_gate(const std::vector<uint8_t> &canon)
     if (pid == 0)
     {
         const char *env_bin = std::getenv("CINDERSENTINEL_AEGIS");
-        const char *bin = (env_bin && *env_bin) ? env_bin : "cindersentinel-aegis";
+        const char *bin = "cindersentinel-aegis";
+        if (geteuid() != 0 && env_bin && *env_bin)
+        {
+            bin = env_bin;
+        }
         ::execlp(bin, bin, tmp, (char *)nullptr);
         _exit(127);
     }
@@ -131,7 +135,6 @@ static void maybe_reexec_with_sudo(int argc, char **argv)
     std::vector<char *> a;
     a.reserve((size_t)argc + 3);
     a.push_back((char *)"sudo");
-    a.push_back((char *)"-E");
     for (int i = 0; i < argc; ++i) a.push_back(argv[i]);
     a.push_back(nullptr);
 
