@@ -383,6 +383,12 @@ static bool path_is_dir(const std::string &p)
     return S_ISDIR(st.st_mode);
 }
 
+static bool path_exists(const std::string &p)
+{
+    struct stat st {};
+    return stat(p.c_str(), &st) == 0;
+}
+
 static bool mkdir_p(const std::string &path, mode_t mode)
 {
     if (path.empty())
@@ -458,9 +464,9 @@ static bool pin_one_map(bpf_object *object, const std::string &maps_dir, const s
 
     std::string path = maps_dir + "/" + name;
 
-    if (!unlink_if_exists(path))
+    if (path_exists(path))
     {
-        return false;
+        return true;
     }
 
     int rc = bpf_map__pin(m, path.c_str());
@@ -468,6 +474,55 @@ static bool pin_one_map(bpf_object *object, const std::string &maps_dir, const s
     {
         std::cerr << "bpf_map__pin failed for " << name << ": " << strerror(-rc) << " (" << rc << ")\n";
         return false;
+    }
+
+    return true;
+}
+
+static bool reuse_pinned_map(bpf_object *object, const std::string &maps_dir, const std::string &name)
+{
+    bpf_map *m = bpf_object__find_map_by_name(object, name.c_str());
+    if (!m)
+    {
+        std::cerr << "Map not found: " << name << "\n";
+        return false;
+    }
+
+    std::string path = maps_dir + "/" + name;
+
+    int fd = bpf_obj_get(path.c_str());
+    if (fd < 0)
+    {
+        if (errno == ENOENT)
+        {
+            return true;
+        }
+        std::cerr << "bpf_obj_get failed for " << name << ": " << strerror(errno) << "\n";
+        return false;
+    }
+
+    int rc = bpf_map__reuse_fd(m, fd);
+    if (rc != 0)
+    {
+        std::cerr << "bpf_map__reuse_fd failed for " << name << ": " << strerror(-rc) << " (" << rc << ")\n";
+        ::close(fd);
+        return false;
+    }
+
+    return true;
+}
+
+static bool reuse_pinned_maps(const options &opts, bpf_object *object)
+{
+    std::string maps_dir = opts.pin_root + "/" + opts.interface_name + "/" + backend_str(opts.backend) + "/maps";
+
+    static const char *k_maps[] = {"cs_cnt", "cs_blk_icmp", "cs_blk_tcp", "cs_blk_udp"};
+    for (const char *m : k_maps)
+    {
+        if (!reuse_pinned_map(object, maps_dir, m))
+        {
+            return false;
+        }
     }
 
     return true;
@@ -503,6 +558,15 @@ static bool open_object_and_load(const options &opts, bpf_object **out_object, i
     {
         std::cerr << "bpf_object__open_file failed: " << strerror(-object_error) << " (" << object_error << ")\n";
         return false;
+    }
+
+    if (opts.pin_enabled)
+    {
+        if (!reuse_pinned_maps(opts, object))
+        {
+            bpf_object__close(object);
+            return false;
+        }
     }
 
     int rc = bpf_object__load(object);
