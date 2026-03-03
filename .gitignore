@@ -1,11 +1,13 @@
 
-logs*/
+logs*/*
 
-build*/
+build*/*
 
-docs*/
+docs*/*
 
-.runenv/
+tmp/*
+
+.runenv/*
 
 *.cbor
 *.cbor.tmp
