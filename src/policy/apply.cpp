@@ -11,6 +11,7 @@
 
 #include "cbor.h"
 #include "keys.h"
+#include "limits.h"
 
 namespace cs
 {
@@ -30,17 +31,14 @@ static int set_err_errno(apply_error &err, const std::string &prefix)
 static std::vector<uint16_t> dump_port_set(int map_fd)
 {
     std::vector<uint16_t> ports;
-    uint16_t cur = 0, next = 0;
-    bool has_cur = false;
+    uint8_t v = 0;
 
-    while (true)
+    for (uint32_t key = 1; key < CS_PORT_MAP_MAX; ++key)
     {
-        void *curp = has_cur ? (void *)&cur : nullptr;
-        int rc = bpf_map_get_next_key(map_fd, curp, &next);
-        if (rc != 0) break;
-        ports.push_back(next);
-        cur = next;
-        has_cur = true;
+        if (bpf_map_lookup_elem(map_fd, &key, &v) == 0 && v != 0)
+        {
+            ports.push_back((uint16_t)key);
+        }
     }
 
     std::sort(ports.begin(), ports.end());
@@ -161,28 +159,38 @@ static void diff_sorted(const std::vector<uint16_t> &oldv,
     }
 }
 
-static int apply_add(int map_fd, const std::vector<uint16_t> &ports, apply_error &err)
+static int apply_add(int map_fd,
+                     const std::vector<uint16_t> &ports,
+                     std::vector<uint16_t> &applied,
+                     apply_error &err)
 {
     uint8_t v = 1;
     for (auto p : ports)
     {
-        if (bpf_map_update_elem(map_fd, &p, &v, BPF_ANY) != 0)
+        uint32_t key = (uint32_t)p;
+        if (bpf_map_update_elem(map_fd, &key, &v, BPF_ANY) != 0)
         {
             return set_err_errno(err, "bpf_map_update_elem failed");
         }
+        applied.push_back(p);
     }
     return 0;
 }
 
-static int apply_del(int map_fd, const std::vector<uint16_t> &ports, apply_error &err)
+static int apply_del(int map_fd,
+                     const std::vector<uint16_t> &ports,
+                     std::vector<uint16_t> &applied,
+                     apply_error &err)
 {
+    uint8_t v = 0;
     for (auto p : ports)
     {
-        if (bpf_map_delete_elem(map_fd, &p) != 0)
+        uint32_t key = (uint32_t)p;
+        if (bpf_map_update_elem(map_fd, &key, &v, BPF_ANY) != 0)
         {
-            if (errno == ENOENT) continue;
-            return set_err_errno(err, "bpf_map_delete_elem failed");
+            return set_err_errno(err, "bpf_map_update_elem failed");
         }
+        applied.push_back(p);
     }
     return 0;
 }
@@ -198,6 +206,33 @@ static int set_icmp(int map_fd, bool v, apply_error &err)
     return 0;
 }
 
+static void rollback_add(int map_fd, const std::vector<uint16_t> &ports)
+{
+    uint8_t v = 0;
+    for (auto p : ports)
+    {
+        uint32_t key = (uint32_t)p;
+        (void)bpf_map_update_elem(map_fd, &key, &v, BPF_ANY);
+    }
+}
+
+static void rollback_del(int map_fd, const std::vector<uint16_t> &ports)
+{
+    uint8_t v = 1;
+    for (auto p : ports)
+    {
+        uint32_t key = (uint32_t)p;
+        (void)bpf_map_update_elem(map_fd, &key, &v, BPF_ANY);
+    }
+}
+
+static void rollback_icmp(int map_fd, bool v)
+{
+    uint32_t k0 = 0;
+    uint8_t x = v ? 1 : 0;
+    (void)bpf_map_update_elem(map_fd, &k0, &x, BPF_ANY);
+}
+
 int apply_delta(const maps_fds &maps,
                 const runtime_state &old_state,
                 const runtime_state &new_state,
@@ -207,30 +242,51 @@ int apply_delta(const maps_fds &maps,
     diff_sorted(old_state.tcp_forbidden_ports, new_state.tcp_forbidden_ports, add_tcp, del_tcp);
     diff_sorted(old_state.udp_forbidden_ports, new_state.udp_forbidden_ports, add_udp, del_udp);
 
+    std::vector<uint16_t> applied_add_tcp;
+    std::vector<uint16_t> applied_add_udp;
+    std::vector<uint16_t> applied_del_tcp;
+    std::vector<uint16_t> applied_del_udp;
+    bool icmp_changed = false;
+    bool icmp_old = old_state.icmp_forbid;
+
+    auto rollback = [&]()
+    {
+        rollback_add(maps.fd_blk_tcp, applied_add_tcp);
+        rollback_add(maps.fd_blk_udp, applied_add_udp);
+        rollback_del(maps.fd_blk_tcp, applied_del_tcp);
+        rollback_del(maps.fd_blk_udp, applied_del_udp);
+        if (icmp_changed)
+        {
+            rollback_icmp(maps.fd_blk_icmp, icmp_old);
+        }
+    };
+
     int rc = 0;
 
-    rc = apply_add(maps.fd_blk_tcp, add_tcp, err);
-    if (rc != 0) return rc;
+    rc = apply_add(maps.fd_blk_tcp, add_tcp, applied_add_tcp, err);
+    if (rc != 0) { rollback(); return rc; }
 
-    rc = apply_add(maps.fd_blk_udp, add_udp, err);
-    if (rc != 0) return rc;
+    rc = apply_add(maps.fd_blk_udp, add_udp, applied_add_udp, err);
+    if (rc != 0) { rollback(); return rc; }
 
     if (new_state.icmp_forbid && !old_state.icmp_forbid)
     {
         rc = set_icmp(maps.fd_blk_icmp, true, err);
-        if (rc != 0) return rc;
+        if (rc != 0) { rollback(); return rc; }
+        icmp_changed = true;
     }
 
-    rc = apply_del(maps.fd_blk_tcp, del_tcp, err);
-    if (rc != 0) return rc;
+    rc = apply_del(maps.fd_blk_tcp, del_tcp, applied_del_tcp, err);
+    if (rc != 0) { rollback(); return rc; }
 
-    rc = apply_del(maps.fd_blk_udp, del_udp, err);
-    if (rc != 0) return rc;
+    rc = apply_del(maps.fd_blk_udp, del_udp, applied_del_udp, err);
+    if (rc != 0) { rollback(); return rc; }
 
     if (!new_state.icmp_forbid && old_state.icmp_forbid)
     {
         rc = set_icmp(maps.fd_blk_icmp, false, err);
-        if (rc != 0) return rc;
+        if (rc != 0) { rollback(); return rc; }
+        icmp_changed = true;
     }
 
     return 0;

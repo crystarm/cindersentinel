@@ -31,17 +31,17 @@ struct
 
 struct
 {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 4096);
-    __type(key, __u16);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 65536);
+    __type(key, __u32);
     __type(value, __u8);
 } cs_blk_tcp SEC(".maps");
 
 struct
 {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 4096);
-    __type(key, __u16);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 65536);
+    __type(key, __u32);
     __type(value, __u8);
 } cs_blk_udp SEC(".maps");
 
@@ -76,14 +76,14 @@ static __always_inline bool cindersentinel_is_icmp_blocked()
 
 static __always_inline bool cindersentinel_is_tcp_port_blocked(__u16 destination_port_host_order)
 {
-    __u16 key = destination_port_host_order;
+    __u32 key = (__u32)destination_port_host_order;
     __u8 *value = bpf_map_lookup_elem(&cs_blk_tcp, &key);
     return value && (*value != 0);
 }
 
 static __always_inline bool cindersentinel_is_udp_port_blocked(__u16 destination_port_host_order)
 {
-    __u16 key = destination_port_host_order;
+    __u32 key = (__u32)destination_port_host_order;
     __u8 *value = bpf_map_lookup_elem(&cs_blk_udp, &key);
     return value && (*value != 0);
 }

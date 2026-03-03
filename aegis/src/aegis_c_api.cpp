@@ -8,6 +8,7 @@
 
 #include "policy/scheme.h"
 #include "policy/apply.h"
+#include "policy/limits.h"
 
 namespace
 {
@@ -15,8 +16,8 @@ struct aegis_limits
 {
     size_t max_rules = 4096;
     size_t max_ranges_per_proto = 4096;
-    size_t max_expanded_ports_per_proto = 200000;
-    size_t max_total_ops = 200000;
+    size_t max_expanded_ports_per_proto = cs::CS_MAX_EXPANDED_PORTS_PER_PROTO;
+    size_t max_total_ops = cs::CS_MAX_TOTAL_OPS;
 };
 
 static int set_err(char *buf, size_t buf_len, const std::string &msg)

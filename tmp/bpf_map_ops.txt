@@ -1,0 +1,32 @@
+/home/georgij/projects/cindersentinel/tmp/ports_and_limits.txt:16:/home/georgij/projects/cindersentinel/bpf/cindersentinel_tc.bpf.c:80:    __u8 *value = bpf_map_lookup_elem(&cs_blk_tcp, &key);
+/home/georgij/projects/cindersentinel/tmp/ports_and_limits.txt:17:/home/georgij/projects/cindersentinel/bpf/cindersentinel_tc.bpf.c:87:    __u8 *value = bpf_map_lookup_elem(&cs_blk_udp, &key);
+/home/georgij/projects/cindersentinel/tmp/ports_and_limits.txt:31:/home/georgij/projects/cindersentinel/bpf/cindersentinel_xdp.bpf.c:80:    __u8 *value = bpf_map_lookup_elem(&cs_blk_tcp, &key);
+/home/georgij/projects/cindersentinel/tmp/ports_and_limits.txt:32:/home/georgij/projects/cindersentinel/bpf/cindersentinel_xdp.bpf.c:87:    __u8 *value = bpf_map_lookup_elem(&cs_blk_udp, &key);
+/home/georgij/projects/cindersentinel/bpf/cindersentinel_tc.bpf.c:59:    __u64 *value = bpf_map_lookup_elem(&cs_cnt, &key);
+/home/georgij/projects/cindersentinel/bpf/cindersentinel_tc.bpf.c:69:    __u8 *value = bpf_map_lookup_elem(&cs_blk_icmp, &key);
+/home/georgij/projects/cindersentinel/bpf/cindersentinel_tc.bpf.c:80:    __u8 *value = bpf_map_lookup_elem(&cs_blk_tcp, &key);
+/home/georgij/projects/cindersentinel/bpf/cindersentinel_tc.bpf.c:87:    __u8 *value = bpf_map_lookup_elem(&cs_blk_udp, &key);
+/home/georgij/projects/cindersentinel/bpf/cindersentinel_xdp.bpf.c:59:    __u64 *value = bpf_map_lookup_elem(&cs_cnt, &key);
+/home/georgij/projects/cindersentinel/bpf/cindersentinel_xdp.bpf.c:69:    __u8 *value = bpf_map_lookup_elem(&cs_blk_icmp, &key);
+/home/georgij/projects/cindersentinel/bpf/cindersentinel_xdp.bpf.c:80:    __u8 *value = bpf_map_lookup_elem(&cs_blk_tcp, &key);
+/home/georgij/projects/cindersentinel/bpf/cindersentinel_xdp.bpf.c:87:    __u8 *value = bpf_map_lookup_elem(&cs_blk_udp, &key);
+/home/georgij/projects/cindersentinel/src/cindersentineld.cpp:332:    if (bpf_map_lookup_elem(map_fd, &key, per_cpu_values.data()) != 0)
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:38:        if (bpf_map_lookup_elem(map_fd, &key, &v) == 0 && v != 0)
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:55:    if (bpf_map_lookup_elem(maps.fd_blk_icmp, &k0, &v) != 0)
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:57:        return set_err_errno(err, "bpf_map_lookup_elem(cs_blk_icmp) failed");
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:171:        if (bpf_map_update_elem(map_fd, &key, &v, BPF_ANY) != 0)
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:173:            return set_err_errno(err, "bpf_map_update_elem failed");
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:189:        if (bpf_map_update_elem(map_fd, &key, &v, BPF_ANY) != 0)
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:191:            return set_err_errno(err, "bpf_map_update_elem failed");
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:202:    if (bpf_map_update_elem(map_fd, &k0, &x, BPF_ANY) != 0)
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:215:        (void)bpf_map_update_elem(map_fd, &key, &v, BPF_ANY);
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:225:        (void)bpf_map_update_elem(map_fd, &key, &v, BPF_ANY);
+/home/georgij/projects/cindersentinel/src/policy/apply.cpp:233:    (void)bpf_map_update_elem(map_fd, &k0, &x, BPF_ANY);
+/home/georgij/projects/cindersentinel/src/cindersentinel.cpp:393:    if (bpf_map_lookup_elem(map_fd, &key, per_cpu.data()) != 0) return 0;
+/home/georgij/projects/cindersentinel/src/cindersentinel.cpp:407:        if (bpf_map_lookup_elem(map_fd, &key, &v) == 0 && v != 0)
+/home/georgij/projects/cindersentinel/src/cindersentinel.cpp:449:    (void)bpf_map_lookup_elem(fds.fd_blk_icmp, &k0, &v);
+/home/georgij/projects/cindersentinel/src/cindersentinel.cpp:652:                if (bpf_map_update_elem(b.fds->fd_blk_icmp, &k0, &v, BPF_ANY) != 0)
+/home/georgij/projects/cindersentinel/src/cindersentinel.cpp:659:                if (bpf_map_update_elem(b.fds->fd_blk_icmp, &k0, &v, BPF_ANY) != 0)
+/home/georgij/projects/cindersentinel/src/cindersentinel.cpp:666:                (void)bpf_map_lookup_elem(b.fds->fd_blk_icmp, &k0, &v);
+/home/georgij/projects/cindersentinel/src/cindersentinel.cpp:709:            if (bpf_map_update_elem(fd, &key, &v, BPF_ANY) != 0)
+/home/georgij/projects/cindersentinel/src/cindersentinel.cpp:717:            if (bpf_map_update_elem(fd, &key, &v, BPF_ANY) != 0)

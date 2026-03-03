@@ -3,12 +3,14 @@ with Ada.Text_IO;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
+with Interfaces;
 
 procedure Cindersentinel_Aegis is
    use Ada.Command_Line;
    use Ada.Text_IO;
    use Ada.Strings.Unbounded;
    use Ada.Streams;
+   use Interfaces;
 
    -- Limits (keep in sync with C++ validator)
    Max_Bytes                 : constant Natural := 1_048_576;
@@ -36,19 +38,19 @@ procedure Cindersentinel_Aegis is
    CSP_TCP             : constant Unsigned_64 := 2;
    CSP_UDP             : constant Unsigned_64 := 3;
 
-   type Range is record
+   type Port_Range is record
       Lo : Unsigned_16;
       Hi : Unsigned_16;
    end record;
 
-   type Range_Array is array (Positive range <>) of Range;
+   type Range_Array is array (Positive range <>) of Port_Range;
 
    type Range_List is record
       Data : Range_Array (1 .. Max_Ranges_Per_Proto);
       Len  : Natural := 0;
    end record;
 
-   procedure Append_Range (L : in out Range_List; R : Range) is
+   procedure Append_Range (L : in out Range_List; R : Port_Range) is
    begin
       if L.Len >= Max_Ranges_Per_Proto then
          raise Program_Error with "too many ranges";
@@ -68,7 +70,7 @@ procedure Cindersentinel_Aegis is
 
    function Read_File (Path : String) return Byte_Array is
       F : Ada.Streams.Stream_IO.File_Type;
-      S : Stream_Element_Array (1 .. Max_Bytes);
+      S : Stream_Element_Array (1 .. Stream_Element_Offset (Max_Bytes));
       Last : Stream_Element_Offset;
    begin
       Ada.Streams.Stream_IO.Open (F, Ada.Streams.Stream_IO.In_File, Path);
@@ -405,7 +407,7 @@ procedure Cindersentinel_Aegis is
       -- simple insertion sort (Len bounded)
       for I in 2 .. L.Len loop
          declare
-            Key : Range := L.Data (I);
+            Key : Port_Range := L.Data (I);
             J : Integer := I - 1;
          begin
             while J >= 1 loop

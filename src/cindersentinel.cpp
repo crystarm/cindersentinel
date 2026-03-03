@@ -22,6 +22,7 @@
 #include "policy/hash.h"
 #include "policy/state_store.h"
 #include "policy/apply.h"
+#include "policy/limits.h"
 
 static void die(const std::string &msg);
 
@@ -255,6 +256,53 @@ struct backend_view
     const cs::maps_fds *fds;
 };
 
+static void apply_summary_to_backends_atomic(const std::vector<backend_view> &backends,
+                                             const cs::policy_summary &sum,
+                                             const char *ctx)
+{
+    cs::apply_limits lim;
+    cs::apply_error ae;
+    cs::runtime_state new_state;
+
+    if (cs::summary_to_runtime_state(sum, new_state, lim, ae) != 0)
+        die(std::string(ctx) + ": " + ae.msg);
+
+    struct backend_state
+    {
+        const char *label;
+        const cs::maps_fds *fds;
+        cs::runtime_state old_state;
+        bool applied = false;
+    };
+
+    std::vector<backend_state> states;
+    states.reserve(backends.size());
+
+    for (const auto &b : backends)
+    {
+        backend_state st { b.label, b.fds, {}, false };
+        if (cs::read_runtime_state(*b.fds, st.old_state, ae) != 0)
+            die(std::string(ctx) + ": " + ae.msg);
+        states.push_back(std::move(st));
+    }
+
+    for (auto &st : states)
+    {
+        if (cs::apply_delta(*st.fds, st.old_state, new_state, ae) != 0)
+        {
+            for (auto &rb : states)
+            {
+                if (!rb.applied) break;
+                (void)cs::apply_delta(*rb.fds, new_state, rb.old_state, ae);
+            }
+            die(std::string(ctx) + ": " + ae.msg);
+        }
+        st.applied = true;
+    }
+}
+
+
+
 static bool runtime_state_equal(const cs::runtime_state &a, const cs::runtime_state &b)
 {
     return a.icmp_forbid == b.icmp_forbid &&
@@ -352,17 +400,14 @@ static uint64_t read_percpu_sum_u64(int map_fd, uint32_t key)
 static std::vector<uint16_t> dump_port_set(int map_fd)
 {
     std::vector<uint16_t> ports;
-    uint16_t cur = 0, next = 0;
-    bool has_cur = false;
+    uint8_t v = 0;
 
-    while (true)
+    for (uint32_t key = 1; key < cs::CS_PORT_MAP_MAX; ++key)
     {
-        void *curp = has_cur ? (void *)&cur : nullptr;
-        int rc = bpf_map_get_next_key(map_fd, curp, &next);
-        if (rc != 0) break;
-        ports.push_back(next);
-        cur = next;
-        has_cur = true;
+        if (bpf_map_lookup_elem(map_fd, &key, &v) == 0 && v != 0)
+        {
+            ports.push_back((uint16_t)key);
+        }
     }
 
     std::sort(ports.begin(), ports.end());
@@ -595,37 +640,81 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
 
     bool show_label = backends.size() > 1;
 
-    if (target == "icmp")
+    auto apply_mutation_atomic = [&](auto mutate, const char *ctx)
     {
+        cs::apply_error ae;
+
+        struct backend_state
+        {
+            const char *label;
+            cs::maps_fds *fds;
+            cs::runtime_state old_state;
+            cs::runtime_state new_state;
+            bool applied = false;
+        };
+
+        std::vector<backend_state> states;
+        states.reserve(backends.size());
+
         for (auto &b : backends)
         {
-            uint32_t k0 = 0;
+            backend_state st { b.label, b.fds, {}, {}, false };
+            if (cs::read_runtime_state(*b.fds, st.old_state, ae) != 0)
+                die(std::string(ctx) + ": " + ae.msg);
+            st.new_state = st.old_state;
+            mutate(st.new_state);
+            states.push_back(std::move(st));
+        }
 
-            if (is_alias(act, {"forbid","on"}))
+        for (auto &st : states)
+        {
+            if (cs::apply_delta(*st.fds, st.old_state, st.new_state, ae) != 0)
             {
-                uint8_t v = 1;
-                if (bpf_map_update_elem(b.fds->fd_blk_icmp, &k0, &v, BPF_ANY) != 0)
-                    die(std::string(b.label) + ": icmp forbid failed: " + std::string(strerror(errno)));
-                mutated = true;
+                for (auto &rb : states)
+                {
+                    if (!rb.applied) break;
+                    (void)cs::apply_delta(*rb.fds, rb.new_state, rb.old_state, ae);
+                }
+                die(std::string(ctx) + ": " + ae.msg);
             }
-            else if (is_alias(act, {"let","off"}))
+            st.applied = true;
+        }
+    };
+
+    if (target == "icmp")
+    {
+        if (act == "show")
+        {
+            for (auto &b : backends)
             {
-                uint8_t v = 0;
-                if (bpf_map_update_elem(b.fds->fd_blk_icmp, &k0, &v, BPF_ANY) != 0)
-                    die(std::string(b.label) + ": icmp let failed: " + std::string(strerror(errno)));
-                mutated = true;
-            }
-            else if (act == "show")
-            {
+                uint32_t k0 = 0;
                 uint8_t v = 0;
                 (void)bpf_map_lookup_elem(b.fds->fd_blk_icmp, &k0, &v);
                 if (show_label) std::cout << "backend=" << b.label << "\n";
                 std::cout << "icmp: " << (v ? "forbid" : "let") << "\n";
             }
-            else
+            return;
+        }
+
+        if (is_alias(act, {"forbid","on"}))
+        {
+            apply_mutation_atomic([&](cs::runtime_state &st)
             {
-                die("etch icmp: action must be forbid|let|show (aliases: on/off)");
-            }
+                st.icmp_forbid = true;
+            }, "etch icmp");
+            mutated = true;
+        }
+        else if (is_alias(act, {"let","off"}))
+        {
+            apply_mutation_atomic([&](cs::runtime_state &st)
+            {
+                st.icmp_forbid = false;
+            }, "etch icmp");
+            mutated = true;
+        }
+        else
+        {
+            die("etch icmp: action must be forbid|let|show (aliases: on/off)");
         }
 
         if (mutated)
@@ -653,29 +742,35 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
     if (args.size() < 3) die("etch " + target + ": missing port");
     uint16_t port = parse_port(args[2]);
 
-    for (auto &b : backends)
+    bool forbid = false;
+    if (is_alias(act, {"forbid","block"}))
     {
-        int fd = (target == "tcp") ? b.fds->fd_blk_tcp : b.fds->fd_blk_udp;
+        forbid = true;
+    }
+    else if (is_alias(act, {"let","unblock"}))
+    {
+        forbid = false;
+    }
+    else
+    {
+        die("etch " + target + ": action must be forbid|let|show (aliases: block/unblock)");
+    }
 
-        if (is_alias(act, {"forbid","block"}))
+    std::string ctx = "etch " + target;
+    apply_mutation_atomic([&](cs::runtime_state &st)
+    {
+        auto &ports = (target == "tcp") ? st.tcp_forbidden_ports : st.udp_forbidden_ports;
+        auto it = std::lower_bound(ports.begin(), ports.end(), port);
+        if (forbid)
         {
-            uint8_t v = 1;
-            if (bpf_map_update_elem(fd, &port, &v, BPF_ANY) != 0)
-                die(std::string(b.label) + ": " + target + " forbid failed: " + std::string(strerror(errno)));
-            mutated = true;
-        }
-        else if (is_alias(act, {"let","unblock"}))
-        {
-            int rc = bpf_map_delete_elem(fd, &port);
-            if (rc != 0 && errno != ENOENT)
-                die(std::string(b.label) + ": " + target + " let failed: " + std::string(strerror(errno)));
-            mutated = true;
+            if (it == ports.end() || *it != port) ports.insert(it, port);
         }
         else
         {
-            die("etch " + target + ": action must be forbid|let|show (aliases: block/unblock)");
+            if (it != ports.end() && *it == port) ports.erase(it);
         }
-    }
+    }, ctx.c_str());
+    mutated = true;
 
     if (mutated)
     {
@@ -810,8 +905,19 @@ static void cmd_invoke(const runtime_opts &rt, const std::vector<std::string> &a
             die("invoke: backend=all requires pinned maps for both tc and xdp");
     }
 
-    if (have_tc) apply_summary_to_maps(tc_fds, sum, "invoke(tc)");
-    if (have_xdp) apply_summary_to_maps(xdp_fds, sum, "invoke(xdp)");
+    if (rt.backend == runtime_backend::all)
+    {
+        std::vector<backend_view> views;
+        views.reserve(2);
+        if (have_tc) views.push_back({"tc", &tc_fds});
+        if (have_xdp) views.push_back({"xdp", &xdp_fds});
+        apply_summary_to_backends_atomic(views, sum, "invoke(all)");
+    }
+    else
+    {
+        if (have_tc) apply_summary_to_maps(tc_fds, sum, "invoke(tc)");
+        if (have_xdp) apply_summary_to_maps(xdp_fds, sum, "invoke(xdp)");
+    }
 
     std::vector<std::string> hist;
     if (store.read_history(hist, se) != 0) die("state: " + se.msg);
@@ -906,8 +1012,19 @@ static void cmd_stepback(const runtime_opts &rt, const std::vector<std::string> 
             die("stepback: backend=all requires pinned maps for both tc and xdp");
     }
 
-    if (have_tc) apply_summary_to_maps(tc_fds, sum, "stepback(tc)");
-    if (have_xdp) apply_summary_to_maps(xdp_fds, sum, "stepback(xdp)");
+    if (rt.backend == runtime_backend::all)
+    {
+        std::vector<backend_view> views;
+        views.reserve(2);
+        if (have_tc) views.push_back({"tc", &tc_fds});
+        if (have_xdp) views.push_back({"xdp", &xdp_fds});
+        apply_summary_to_backends_atomic(views, sum, "stepback(all)");
+    }
+    else
+    {
+        if (have_tc) apply_summary_to_maps(tc_fds, sum, "stepback(tc)");
+        if (have_xdp) apply_summary_to_maps(xdp_fds, sum, "stepback(xdp)");
+    }
 
     if (store.write_history(hist, se) != 0) die("state: " + se.msg);
 

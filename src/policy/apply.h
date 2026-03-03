@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "limits.h"
 #include "scheme.h"
 #include "maps_pins.h"
 
@@ -25,8 +26,8 @@ struct runtime_state
 
 struct apply_limits
 {
-    size_t max_expanded_ports_per_proto = 200000;
-    size_t max_total_ops = 200000;
+    size_t max_expanded_ports_per_proto = CS_MAX_EXPANDED_PORTS_PER_PROTO;
+    size_t max_total_ops = CS_MAX_TOTAL_OPS;
 };
 
 int read_runtime_state(const maps_fds &maps, runtime_state &out, apply_error &err);
