@@ -23,6 +23,7 @@ struct maps_fds
     int fd_blk_icmp = -1;
     int fd_blk_tcp = -1;
     int fd_blk_udp = -1;
+    int fd_blk_ipv4_frag = -1;
 
     maps_fds() = default;
     maps_fds(const maps_fds &) = delete;
@@ -42,7 +43,8 @@ struct maps_fds
             fd_blk_icmp = o.fd_blk_icmp;
             fd_blk_tcp = o.fd_blk_tcp;
             fd_blk_udp = o.fd_blk_udp;
-            o.fd_cnt = o.fd_blk_icmp = o.fd_blk_tcp = o.fd_blk_udp = -1;
+            fd_blk_ipv4_frag = o.fd_blk_ipv4_frag;
+            o.fd_cnt = o.fd_blk_icmp = o.fd_blk_tcp = o.fd_blk_udp = o.fd_blk_ipv4_frag = -1;
         }
         return *this;
     }

@@ -309,6 +309,7 @@ static void apply_summary_to_backends_atomic(const std::vector<backend_view> &ba
 static bool runtime_state_equal(const cs::runtime_state &a, const cs::runtime_state &b)
 {
     return a.icmp_forbid == b.icmp_forbid &&
+           a.ipv4_frag_drop == b.ipv4_frag_drop &&
            a.tcp_forbidden_ports == b.tcp_forbidden_ports &&
            a.udp_forbidden_ports == b.udp_forbidden_ports;
 }
@@ -451,7 +452,11 @@ static void cmd_aura_from_maps(const cs::maps_fds &fds, const char *label, bool 
     uint8_t v = 0;
     (void)bpf_map_lookup_elem(fds.fd_blk_icmp, &k0, &v);
 
+    uint8_t v_frag = 0;
+    (void)bpf_map_lookup_elem(fds.fd_blk_ipv4_frag, &k0, &v_frag);
+
     std::cout << "icmp: " << (v ? "forbid" : "let") << "\n";
+    std::cout << "ipv4_frag: " << (v_frag ? "let" : "drop") << "\n";
 
     auto tcp = dump_port_set(fds.fd_blk_tcp);
     auto udp = dump_port_set(fds.fd_blk_udp);
@@ -505,6 +510,7 @@ static void cmd_embers_from_maps(const cs::maps_fds &fds, const char *label, boo
     uint64_t drop_icmp = read_percpu_sum_u64(fds.fd_cnt, 2);
     uint64_t drop_tcp = read_percpu_sum_u64(fds.fd_cnt, 3);
     uint64_t drop_udp = read_percpu_sum_u64(fds.fd_cnt, 4);
+    uint64_t drop_ipv4_frag = read_percpu_sum_u64(fds.fd_cnt, 5);
 
     if (show_label) std::cout << "backend=" << label << " ";
 
@@ -514,6 +520,7 @@ static void cmd_embers_from_maps(const cs::maps_fds &fds, const char *label, boo
         << " drop_icmp=" << drop_icmp
         << " drop_tcp_port=" << drop_tcp
         << " drop_udp_port=" << drop_udp
+        << " drop_ipv4_frag=" << drop_ipv4_frag
         << "\n";
 }
 
@@ -594,10 +601,10 @@ static void cmd_embers(const runtime_opts &rt, const std::vector<std::string> &a
 
 static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &args)
 {
-    if (args.size() < 1) die("etch: missing target (icmp|tcp|udp)");
+    if (args.size() < 1) die("etch: missing target (icmp|tcp|udp|ipv4_frag)");
 
     std::string target = args[0];
-    if (target != "icmp" && target != "tcp" && target != "udp")
+    if (target != "icmp" && target != "tcp" && target != "udp" && target != "ipv4_frag")
         die("etch: bad target: " + target);
 
     if (args.size() < 2) die("etch: missing action");
@@ -683,6 +690,52 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             st.applied = true;
         }
     };
+
+    if (target == "ipv4_frag")
+    {
+        if (act == "show")
+        {
+            for (auto &b : backends)
+            {
+                uint32_t k0 = 0;
+                uint8_t v = 0;
+                (void)bpf_map_lookup_elem(b.fds->fd_blk_ipv4_frag, &k0, &v);
+                if (show_label) std::cout << "backend=" << b.label << "\n";
+                std::cout << "ipv4_frag: " << (v ? "let" : "drop") << "\n";
+            }
+            return;
+        }
+
+        if (is_alias(act, {"drop","forbid","on"}))
+        {
+            apply_mutation_atomic([&](cs::runtime_state &st)
+            {
+                st.ipv4_frag_drop = true;
+            }, "etch ipv4_frag");
+            mutated = true;
+        }
+        else if (is_alias(act, {"let","pass","off"}))
+        {
+            apply_mutation_atomic([&](cs::runtime_state &st)
+            {
+                st.ipv4_frag_drop = false;
+            }, "etch ipv4_frag");
+            mutated = true;
+        }
+        else
+        {
+            die("etch ipv4_frag: action must be drop|let|show (aliases: forbid/on, pass/off)");
+        }
+
+        if (mutated)
+        {
+            std::vector<backend_view> views;
+            views.reserve(backends.size());
+            for (auto &b : backends) views.push_back({b.label, b.fds});
+            sync_runtime_to_state(rt, views, "etch");
+        }
+        return;
+    }
 
     if (target == "icmp")
     {
@@ -1069,6 +1122,7 @@ static void usage(const char *argv0)
         << "  " << argv0 << " etch icmp forbid|let|show --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
         << "  " << argv0 << " etch tcp  forbid|let|show [port] --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
         << "  " << argv0 << " etch udp  forbid|let|show [port] --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
+        << "  " << argv0 << " etch ipv4_frag drop|let|show --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
         << "  " << argv0 << " aura --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>]\n"
         << "  " << argv0 << " embers --iface <ifname> [--backend tc|xdp|all] [--pin-base <path>] [--watch] [--interval-ms N]\n"
         << "  " << argv0 << " try <policy.cbor> [--out <canonical.cbor>]\n"

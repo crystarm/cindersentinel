@@ -195,6 +195,7 @@ add_custom_command(
           -c ${CMAKE_SOURCE_DIR}/bpf/cindersentinel_tc.bpf.c
           -o ${BPF_TC_OBJ}
   DEPENDS ${CMAKE_SOURCE_DIR}/bpf/cindersentinel_tc.bpf.c
+          ${CMAKE_SOURCE_DIR}/bpf/cindersentinel_common.h
   VERBATIM
 )
 
@@ -207,6 +208,7 @@ add_custom_command(
           -c ${CMAKE_SOURCE_DIR}/bpf/cindersentinel_xdp.bpf.c
           -o ${BPF_XDP_OBJ}
   DEPENDS ${CMAKE_SOURCE_DIR}/bpf/cindersentinel_xdp.bpf.c
+          ${CMAKE_SOURCE_DIR}/bpf/cindersentinel_common.h
   VERBATIM
 )
 

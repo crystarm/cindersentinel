@@ -19,6 +19,7 @@ struct policy_summary
     std::string kind;
     uint64_t v = 0;
     bool icmp_forbid = false;
+    bool ipv4_frag_drop = true;
     std::vector<port_range> tcp_forbid;
     std::vector<port_range> udp_forbid;
     size_t rule_count = 0;

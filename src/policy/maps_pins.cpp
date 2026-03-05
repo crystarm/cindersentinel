@@ -30,7 +30,8 @@ void maps_fds::close()
     if (fd_blk_icmp >= 0) ::close(fd_blk_icmp);
     if (fd_blk_tcp >= 0) ::close(fd_blk_tcp);
     if (fd_blk_udp >= 0) ::close(fd_blk_udp);
-    fd_cnt = fd_blk_icmp = fd_blk_tcp = fd_blk_udp = -1;
+    if (fd_blk_ipv4_frag >= 0) ::close(fd_blk_ipv4_frag);
+    fd_cnt = fd_blk_icmp = fd_blk_tcp = fd_blk_udp = fd_blk_ipv4_frag = -1;
 }
 
 std::string backend_dir(cs_backend b)
@@ -104,7 +105,7 @@ int open_pinned_maps(const maps_pins_opts &opt, maps_fds &out, maps_error &err)
 
     int rc = 0;
 
-    rc = open_map_checked(dir + "/cs_cnt", BPF_MAP_TYPE_PERCPU_ARRAY, 4, 8, 5, out.fd_cnt, err);
+    rc = open_map_checked(dir + "/cs_cnt", BPF_MAP_TYPE_PERCPU_ARRAY, 4, 8, 6, out.fd_cnt, err);
     if (rc != 0) { out.close(); return rc; }
 
     rc = open_map_checked(dir + "/cs_blk_icmp", BPF_MAP_TYPE_ARRAY, 4, 1, 1, out.fd_blk_icmp, err);
@@ -114,6 +115,9 @@ int open_pinned_maps(const maps_pins_opts &opt, maps_fds &out, maps_error &err)
     if (rc != 0) { out.close(); return rc; }
 
     rc = open_map_checked(dir + "/cs_blk_udp", BPF_MAP_TYPE_ARRAY, 4, 1, CS_PORT_MAP_MAX, out.fd_blk_udp, err);
+    if (rc != 0) { out.close(); return rc; }
+
+    rc = open_map_checked(dir + "/cs_blk_ipv4_frag", BPF_MAP_TYPE_ARRAY, 4, 1, 1, out.fd_blk_ipv4_frag, err);
     if (rc != 0) { out.close(); return rc; }
 
     return 0;
