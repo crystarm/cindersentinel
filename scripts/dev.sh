@@ -22,6 +22,8 @@ Usage:
     ${script_dir}/dev.sh icmp forbid|let|show
     ${script_dir}/dev.sh tcp  forbid|let|show <port?>
     ${script_dir}/dev.sh udp  forbid|let|show <port?>
+    ${script_dir}/dev.sh ipv4_frag drop|let|show
+    ${script_dir}/dev.sh ipv4_encap drop|let|show
 
   ${script_dir}/dev.sh clean            - alias for down
 USAGE
@@ -64,7 +66,7 @@ case "${cmd}" in
     sudo -E "${CLI_BIN}" embers --iface "${IFACE_A}" --backend tc --watch --interval-ms 1000
     ;;
 
-  icmp|tcp|udp)
+  icmp|tcp|udp|ipv4_frag|ipv4_encap)
     sudo -E "${CLI_BIN}" etch "${cmd}" "$@" --iface "${IFACE_A}" --backend tc
     ;;
 

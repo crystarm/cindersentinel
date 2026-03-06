@@ -794,8 +794,26 @@ int main(int argc, char **argv)
         {
             uint64_t passed = read_percpu_counter_sum(counters_fd, 0);
             uint64_t dropped = read_percpu_counter_sum(counters_fd, 1);
+            uint64_t drop_icmp = read_percpu_counter_sum(counters_fd, 2);
+            uint64_t drop_tcp = read_percpu_counter_sum(counters_fd, 3);
+            uint64_t drop_udp = read_percpu_counter_sum(counters_fd, 4);
+            uint64_t drop_ipv4_frag = read_percpu_counter_sum(counters_fd, 5);
+            uint64_t drop_ipv4_encap = read_percpu_counter_sum(counters_fd, 6);
+            uint64_t drop_invalid_l4 = read_percpu_counter_sum(counters_fd, 7);
+            uint64_t drop_invalid_tcp_header = read_percpu_counter_sum(counters_fd, 8);
+            uint64_t drop_invalid_udp_length = read_percpu_counter_sum(counters_fd, 9);
 
-            std::cout << "passed=" << passed << " dropped=" << dropped << "\n";
+            std::cout << "passed=" << passed
+                      << " dropped=" << dropped
+                      << " drop_icmp=" << drop_icmp
+                      << " drop_tcp_port=" << drop_tcp
+                      << " drop_udp_port=" << drop_udp
+                      << " drop_ipv4_frag=" << drop_ipv4_frag
+                      << " drop_ipv4_encap=" << drop_ipv4_encap
+                      << " drop_invalid_l4=" << drop_invalid_l4
+                      << " drop_invalid_tcp_header=" << drop_invalid_tcp_header
+                      << " drop_invalid_udp_length=" << drop_invalid_udp_length
+                      << "\n";
             std::cout.flush();
 
             if (opts.print_once)
@@ -841,8 +859,26 @@ int main(int argc, char **argv)
     {
         uint64_t passed = read_percpu_counter_sum(counters_fd, 0);
         uint64_t dropped = read_percpu_counter_sum(counters_fd, 1);
+        uint64_t drop_icmp = read_percpu_counter_sum(counters_fd, 2);
+        uint64_t drop_tcp = read_percpu_counter_sum(counters_fd, 3);
+        uint64_t drop_udp = read_percpu_counter_sum(counters_fd, 4);
+        uint64_t drop_ipv4_frag = read_percpu_counter_sum(counters_fd, 5);
+        uint64_t drop_ipv4_encap = read_percpu_counter_sum(counters_fd, 6);
+        uint64_t drop_invalid_l4 = read_percpu_counter_sum(counters_fd, 7);
+        uint64_t drop_invalid_tcp_header = read_percpu_counter_sum(counters_fd, 8);
+        uint64_t drop_invalid_udp_length = read_percpu_counter_sum(counters_fd, 9);
 
-        std::cout << "passed=" << passed << " dropped=" << dropped << "\n";
+        std::cout << "passed=" << passed
+                  << " dropped=" << dropped
+                  << " drop_icmp=" << drop_icmp
+                  << " drop_tcp_port=" << drop_tcp
+                  << " drop_udp_port=" << drop_udp
+                  << " drop_ipv4_frag=" << drop_ipv4_frag
+                  << " drop_ipv4_encap=" << drop_ipv4_encap
+                  << " drop_invalid_l4=" << drop_invalid_l4
+                  << " drop_invalid_tcp_header=" << drop_invalid_tcp_header
+                  << " drop_invalid_udp_length=" << drop_invalid_udp_length
+                  << "\n";
         std::cout.flush();
 
         if (opts.print_once)

@@ -37,6 +37,11 @@ while true; do
       if (k==2) return "drop_icmp";
       if (k==3) return "drop_tcp_port";
       if (k==4) return "drop_udp_port";
+      if (k==5) return "drop_ipv4_frag";
+      if (k==6) return "drop_ipv4_encap";
+      if (k==7) return "drop_invalid_l4";
+      if (k==8) return "drop_invalid_tcp_header";
+      if (k==9) return "drop_invalid_udp_length";
       return "key" k;
     }
     /^key:/ {

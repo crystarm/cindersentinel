@@ -106,7 +106,7 @@ int open_pinned_maps(const maps_pins_opts &opt, maps_fds &out, maps_error &err)
 
     int rc = 0;
 
-    rc = open_map_checked(dir + "/cs_cnt", BPF_MAP_TYPE_PERCPU_ARRAY, 4, 8, 8, out.fd_cnt, err);
+    rc = open_map_checked(dir + "/cs_cnt", BPF_MAP_TYPE_PERCPU_ARRAY, 4, 8, 10, out.fd_cnt, err);
     if (rc != 0) { out.close(); return rc; }
 
     rc = open_map_checked(dir + "/cs_blk_icmp", BPF_MAP_TYPE_ARRAY, 4, 1, 1, out.fd_blk_icmp, err);

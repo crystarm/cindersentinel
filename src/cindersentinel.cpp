@@ -517,6 +517,9 @@ static void cmd_embers_from_maps(const cs::maps_fds &fds, const char *label, boo
     uint64_t drop_udp = read_percpu_sum_u64(fds.fd_cnt, 4);
     uint64_t drop_ipv4_frag = read_percpu_sum_u64(fds.fd_cnt, 5);
     uint64_t drop_ipv4_encap = read_percpu_sum_u64(fds.fd_cnt, 6);
+    uint64_t drop_invalid_l4 = read_percpu_sum_u64(fds.fd_cnt, 7);
+    uint64_t drop_invalid_tcp_header = read_percpu_sum_u64(fds.fd_cnt, 8);
+    uint64_t drop_invalid_udp_length = read_percpu_sum_u64(fds.fd_cnt, 9);
 
     if (show_label) std::cout << "backend=" << label << " ";
 
@@ -528,6 +531,9 @@ static void cmd_embers_from_maps(const cs::maps_fds &fds, const char *label, boo
         << " drop_udp_port=" << drop_udp
         << " drop_ipv4_frag=" << drop_ipv4_frag
         << " drop_ipv4_encap=" << drop_ipv4_encap
+        << " drop_invalid_l4=" << drop_invalid_l4
+        << " drop_invalid_tcp_header=" << drop_invalid_tcp_header
+        << " drop_invalid_udp_length=" << drop_invalid_udp_length
         << "\n";
 }
 

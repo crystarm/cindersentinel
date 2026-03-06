@@ -14,6 +14,8 @@ fi
 MAP_ICMP="${MAP_ICMP:-cs_blk_icmp}"
 MAP_TCP="${MAP_TCP:-cs_blk_tcp}"
 MAP_UDP="${MAP_UDP:-cs_blk_udp}"
+MAP_IPV4_FRAG="${MAP_IPV4_FRAG:-cs_blk_ipv4_frag}"
+MAP_IPV4_ENCAP="${MAP_IPV4_ENCAP:-cs_blk_ipv4_encap}"
 
 find_map_id()
 {
@@ -96,7 +98,29 @@ case "${cmd}" in
     esac
     ;;
 
+  ipv4_frag)
+    mode="${1:-}"; shift || true
+    map_id="$(find_map_id "${MAP_IPV4_FRAG}")"
+    case "${mode}" in
+      drop) bpftool map update id "${map_id}" key 0 0 0 0 value 0 ;;
+      let)  bpftool map update id "${map_id}" key 0 0 0 0 value 1 ;;
+      show) bpftool map dump id "${map_id}" ;;
+      *) die "rules.sh: usage: rules.sh ipv4_frag drop|let|show" ;;
+    esac
+    ;;
+
+  ipv4_encap)
+    mode="${1:-}"; shift || true
+    map_id="$(find_map_id "${MAP_IPV4_ENCAP}")"
+    case "${mode}" in
+      drop) bpftool map update id "${map_id}" key 0 0 0 0 value 0 ;;
+      let)  bpftool map update id "${map_id}" key 0 0 0 0 value 1 ;;
+      show) bpftool map dump id "${map_id}" ;;
+      *) die "rules.sh: usage: rules.sh ipv4_encap drop|let|show" ;;
+    esac
+    ;;
+
   *)
-    die "rules.sh: usage: rules.sh icmp|tcp|udp ..."
+    die "rules.sh: usage: rules.sh icmp|tcp|udp|ipv4_frag|ipv4_encap ..."
     ;;
 esac
