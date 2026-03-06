@@ -10,6 +10,7 @@ Iterate all inputs in a corpus directory and run repro.sh on each file.
 Defaults:
   - corpus_dir: fuzzer/cbor/corpus
   - uses fuzzer/cbor/scripts/repro.sh
+  - build fuzzer first: scripts/build-fuzzer.sh
   - stops on first failure
 
 Env overrides:

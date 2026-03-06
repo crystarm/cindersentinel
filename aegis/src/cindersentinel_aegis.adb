@@ -169,11 +169,18 @@ procedure Cindersentinel_Aegis is
    end Enter_Node;
 
    function Peek_Major (P : in Parser) return Unsigned_8 is
+      B  : Unsigned_8;
+      AI : Unsigned_8;
    begin
       if P.Pos >= P.Buf'Length then
          Fail ("CBOR decode error: truncated");
       end if;
-      return P.Buf (P.Pos) / 32;
+      B := P.Buf (P.Pos);
+      AI := B mod 32;
+      if AI >= 28 and then AI <= 30 then
+         Fail ("CBOR decode error: invalid additional info");
+      end if;
+      return B / 32;
    end Peek_Major;
 
    function Read_Head (P : in out Parser; Major : Unsigned_8) return Unsigned_64 is
