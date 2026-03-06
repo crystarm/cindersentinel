@@ -63,8 +63,15 @@ int read_runtime_state(const maps_fds &maps, runtime_state &out, apply_error &er
         return set_err_errno(err, "bpf_map_lookup_elem(cs_blk_ipv4_frag) failed");
     }
 
+    uint8_t v_encap = 0;
+    if (bpf_map_lookup_elem(maps.fd_blk_ipv4_encap, &k0, &v_encap) != 0)
+    {
+        return set_err_errno(err, "bpf_map_lookup_elem(cs_blk_ipv4_encap) failed");
+    }
+
     st.icmp_forbid = (v != 0);
     st.ipv4_frag_drop = (v_frag == 0);
+    st.ipv4_encap_drop = (v_encap == 0);
     st.tcp_forbidden_ports = dump_port_set(maps.fd_blk_tcp);
     st.udp_forbidden_ports = dump_port_set(maps.fd_blk_udp);
 
@@ -109,6 +116,7 @@ int summary_to_runtime_state(const policy_summary &sum,
     runtime_state st;
     st.icmp_forbid = sum.icmp_forbid;
     st.ipv4_frag_drop = sum.ipv4_frag_drop;
+    st.ipv4_encap_drop = sum.ipv4_encap_drop;
 
     int rc = expand_ranges(sum.tcp_forbid, st.tcp_forbidden_ports, lim.max_expanded_ports_per_proto, err);
     if (rc != 0) return rc;
@@ -225,6 +233,17 @@ static int set_ipv4_frag_policy(int map_fd, bool drop, apply_error &err)
     return 0;
 }
 
+static int set_ipv4_encap_policy(int map_fd, bool drop, apply_error &err)
+{
+    uint32_t k0 = 0;
+    uint8_t x = drop ? 0 : 1;
+    if (bpf_map_update_elem(map_fd, &k0, &x, BPF_ANY) != 0)
+    {
+        return set_err_errno(err, "set ipv4 encap policy failed");
+    }
+    return 0;
+}
+
 static void rollback_add(int map_fd, const std::vector<uint16_t> &ports)
 {
     uint8_t v = 0;
@@ -259,6 +278,13 @@ static void rollback_ipv4_frag_policy(int map_fd, bool drop)
     (void)bpf_map_update_elem(map_fd, &k0, &x, BPF_ANY);
 }
 
+static void rollback_ipv4_encap_policy(int map_fd, bool drop)
+{
+    uint32_t k0 = 0;
+    uint8_t x = drop ? 0 : 1;
+    (void)bpf_map_update_elem(map_fd, &k0, &x, BPF_ANY);
+}
+
 int apply_delta(const maps_fds &maps,
                 const runtime_state &old_state,
                 const runtime_state &new_state,
@@ -276,6 +302,8 @@ int apply_delta(const maps_fds &maps,
     bool icmp_old = old_state.icmp_forbid;
     bool frag_changed = false;
     bool frag_old = old_state.ipv4_frag_drop;
+    bool encap_changed = false;
+    bool encap_old = old_state.ipv4_encap_drop;
 
     auto rollback = [&]()
     {
@@ -290,6 +318,10 @@ int apply_delta(const maps_fds &maps,
         if (frag_changed)
         {
             rollback_ipv4_frag_policy(maps.fd_blk_ipv4_frag, frag_old);
+        }
+        if (encap_changed)
+        {
+            rollback_ipv4_encap_policy(maps.fd_blk_ipv4_encap, encap_old);
         }
     };
 
@@ -313,6 +345,13 @@ int apply_delta(const maps_fds &maps,
         rc = set_ipv4_frag_policy(maps.fd_blk_ipv4_frag, new_state.ipv4_frag_drop, err);
         if (rc != 0) { rollback(); return rc; }
         frag_changed = true;
+    }
+
+    if (new_state.ipv4_encap_drop != old_state.ipv4_encap_drop)
+    {
+        rc = set_ipv4_encap_policy(maps.fd_blk_ipv4_encap, new_state.ipv4_encap_drop, err);
+        if (rc != 0) { rollback(); return rc; }
+        encap_changed = true;
     }
 
     rc = apply_del(maps.fd_blk_tcp, del_tcp, applied_del_tcp, err);
@@ -430,6 +469,9 @@ int build_policy_from_runtime(const runtime_state &st,
 
     root_keys.push_back(CSK_IPV4_FRAG_POLICY);
     root_vals.push_back(cbor_value::make_uint(st.ipv4_frag_drop ? CSA_FORBID : CSA_LET));
+
+    root_keys.push_back(CSK_IPV4_ENCAP_POLICY);
+    root_vals.push_back(cbor_value::make_uint(st.ipv4_encap_drop ? CSA_FORBID : CSA_LET));
 
     root_keys.push_back(CSK_RULES);
     root_vals.push_back(cbor_value::make_array(std::move(rules)));

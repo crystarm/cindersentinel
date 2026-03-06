@@ -21,6 +21,7 @@ struct runtime_state
 {
     bool icmp_forbid = false;
     bool ipv4_frag_drop = true;
+    bool ipv4_encap_drop = false;
     std::vector<uint16_t> tcp_forbidden_ports;
     std::vector<uint16_t> udp_forbidden_ports;
 };

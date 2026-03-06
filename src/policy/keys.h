@@ -15,6 +15,7 @@ enum : uint64_t
     CSK_DEFAULT_ACTION = 3,
     CSK_RULES = 4,
     CSK_IPV4_FRAG_POLICY = 5,
+    CSK_IPV4_ENCAP_POLICY = 6,
 };
 
 enum : uint64_t

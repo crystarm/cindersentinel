@@ -70,8 +70,11 @@ enum cindersentinel_counter_key
     CINDERSENTINEL_COUNTER_DROPPED_TCP_PORT = 3,
     CINDERSENTINEL_COUNTER_DROPPED_UDP_PORT = 4,
     CINDERSENTINEL_COUNTER_DROPPED_IPV4_FRAG = 5,
-    CINDERSENTINEL_COUNTER_DROPPED_INVALID_L4 = 6,
-    CINDERSENTINEL_COUNTER_MAX = 7
+    CINDERSENTINEL_COUNTER_DROPPED_IPV4_ENCAP = 6,
+    CINDERSENTINEL_COUNTER_DROPPED_INVALID_L4 = 7,
+    CINDERSENTINEL_COUNTER_DROPPED_INVALID_TCP_HEADER = 8,
+    CINDERSENTINEL_COUNTER_DROPPED_INVALID_UDP_LENGTH = 9,
+    CINDERSENTINEL_COUNTER_MAX = 10
 };
 
 struct
@@ -113,6 +116,14 @@ struct
     __type(key, __u32);
     __type(value, __u8);
 } cs_blk_ipv4_frag SEC(".maps");
+
+struct
+{
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u8);
+} cs_blk_ipv4_encap SEC(".maps");
 
 static __always_inline void cindersentinel_increment_counter(enum cindersentinel_counter_key counter_key)
 {
@@ -156,6 +167,17 @@ static __always_inline bool cindersentinel_ipv4_fragments_drop()
     if (!value)
     {
         return true;
+    }
+    return (*value) == 0;
+}
+
+static __always_inline bool cindersentinel_ipv4_encap_drop()
+{
+    __u32 key = 0;
+    __u8 *value = bpf_map_lookup_elem(&cs_blk_ipv4_encap, &key);
+    if (!value)
+    {
+        return false;
     }
     return (*value) == 0;
 }
@@ -242,20 +264,20 @@ static __always_inline int cindersentinel_process_ipv4(void *data, void *data_en
         struct tcphdr *tcp_header = layer4;
         if ((void *)(tcp_header + 1) > data_end)
         {
-            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_L4);
+            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_TCP_HEADER);
             return cindersentinel_pass(pass_action);
         }
 
         __u32 tcp_header_length = (__u32)tcp_header->doff * 4u;
         if (tcp_header_length < sizeof(*tcp_header))
         {
-            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_L4);
+            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_TCP_HEADER);
             return cindersentinel_pass(pass_action);
         }
 
         if ((void *)tcp_header + tcp_header_length > data_end)
         {
-            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_L4);
+            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_TCP_HEADER);
             return cindersentinel_pass(pass_action);
         }
 
@@ -273,33 +295,33 @@ static __always_inline int cindersentinel_process_ipv4(void *data, void *data_en
         struct udphdr *udp_header = layer4;
         if ((void *)(udp_header + 1) > data_end)
         {
-            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_L4);
+            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_UDP_LENGTH);
             return cindersentinel_pass(pass_action);
         }
 
         __u16 udp_length = bpf_ntohs(udp_header->len);
         if (udp_length < sizeof(*udp_header))
         {
-            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_L4);
+            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_UDP_LENGTH);
             return cindersentinel_pass(pass_action);
         }
 
         __u32 ip_total_length = (__u32)bpf_ntohs(ip_header->tot_len);
         if (ip_total_length < ip_header_length + sizeof(*udp_header))
         {
-            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_L4);
+            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_UDP_LENGTH);
             return cindersentinel_pass(pass_action);
         }
 
         if (udp_length > ip_total_length - ip_header_length)
         {
-            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_L4);
+            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_UDP_LENGTH);
             return cindersentinel_pass(pass_action);
         }
 
         if ((void *)udp_header + udp_length > data_end)
         {
-            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_L4);
+            cindersentinel_increment_counter(CINDERSENTINEL_COUNTER_DROPPED_INVALID_UDP_LENGTH);
             return cindersentinel_pass(pass_action);
         }
 
@@ -310,6 +332,16 @@ static __always_inline int cindersentinel_process_ipv4(void *data, void *data_en
         }
 
         return cindersentinel_pass(pass_action);
+    }
+
+    if (ip_header->protocol == IPPROTO_IPIP || ip_header->protocol == IPPROTO_GRE ||
+        (ip_header->protocol != IPPROTO_ICMP && ip_header->protocol != IPPROTO_TCP &&
+         ip_header->protocol != IPPROTO_UDP))
+    {
+        if (cindersentinel_ipv4_encap_drop())
+        {
+            return cindersentinel_drop(CINDERSENTINEL_COUNTER_DROPPED_IPV4_ENCAP, drop_action);
+        }
     }
 
     return cindersentinel_pass(pass_action);

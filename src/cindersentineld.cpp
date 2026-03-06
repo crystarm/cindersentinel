@@ -516,7 +516,7 @@ static bool reuse_pinned_maps(const options &opts, bpf_object *object)
 {
     std::string maps_dir = opts.pin_root + "/" + opts.interface_name + "/" + backend_str(opts.backend) + "/maps";
 
-    static const char *k_maps[] = {"cs_cnt", "cs_blk_icmp", "cs_blk_tcp", "cs_blk_udp", "cs_blk_ipv4_frag"};
+    static const char *k_maps[] = {"cs_cnt", "cs_blk_icmp", "cs_blk_tcp", "cs_blk_udp", "cs_blk_ipv4_frag", "cs_blk_ipv4_encap"};
     for (const char *m : k_maps)
     {
         if (!reuse_pinned_map(object, maps_dir, m))
@@ -537,7 +537,7 @@ static bool pin_required_maps(const options &opts, bpf_object *object)
         return false;
     }
 
-    static const char *k_maps[] = {"cs_cnt", "cs_blk_icmp", "cs_blk_tcp", "cs_blk_udp", "cs_blk_ipv4_frag"};
+    static const char *k_maps[] = {"cs_cnt", "cs_blk_icmp", "cs_blk_tcp", "cs_blk_udp", "cs_blk_ipv4_frag", "cs_blk_ipv4_encap"};
     for (const char *m : k_maps)
     {
         if (!pin_one_map(object, maps_dir, m))

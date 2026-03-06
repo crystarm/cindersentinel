@@ -252,7 +252,7 @@ bool policy_parse_validate_canonical(const std::vector<uint8_t> &in,
     {
         uint64_t k = kv.first;
         if (k != CSK_KIND && k != CSK_V && k != CSK_DEFAULT_ACTION && k != CSK_RULES &&
-            k != CSK_IPV4_FRAG_POLICY)
+            k != CSK_IPV4_FRAG_POLICY && k != CSK_IPV4_ENCAP_POLICY)
         {
             return fail(err, "unknown root field");
         }
@@ -263,6 +263,7 @@ bool policy_parse_validate_canonical(const std::vector<uint8_t> &in,
     const cbor_value *v_def   = find_key(idx, CSK_DEFAULT_ACTION);
     const cbor_value *v_rules = find_key(idx, CSK_RULES);
     const cbor_value *v_frag  = find_key(idx, CSK_IPV4_FRAG_POLICY);
+    const cbor_value *v_encap = find_key(idx, CSK_IPV4_ENCAP_POLICY);
 
     if (!v_kind || !v_v || !v_rules) return fail(err, "missing required root fields");
 
@@ -288,6 +289,17 @@ bool policy_parse_validate_canonical(const std::vector<uint8_t> &in,
             return fail(err, "ipv4_frag_policy must be let|forbid");
         }
         sum.ipv4_frag_drop = (frag == CSA_FORBID);
+    }
+
+    if (v_encap)
+    {
+        uint64_t encap = 0;
+        if (!get_u64(*v_encap, encap)) return fail(err, "ipv4_encap_policy must be uint");
+        if (encap != CSA_LET && encap != CSA_FORBID)
+        {
+            return fail(err, "ipv4_encap_policy must be let|forbid");
+        }
+        sum.ipv4_encap_drop = (encap == CSA_FORBID);
     }
 
     if (v_rules->t != cbor_type::ARRAY) return fail(err, "rules must be array");
@@ -316,8 +328,8 @@ bool policy_parse_validate_canonical(const std::vector<uint8_t> &in,
 
     std::vector<uint64_t> root_keys;
     std::vector<cbor_value> root_vals;
-    root_keys.reserve(5);
-    root_vals.reserve(5);
+    root_keys.reserve(6);
+    root_vals.reserve(6);
 
     root_keys.push_back(CSK_KIND);
     root_vals.push_back(cbor_value::make_text(sum.kind));
@@ -335,6 +347,12 @@ bool policy_parse_validate_canonical(const std::vector<uint8_t> &in,
     {
         root_keys.push_back(CSK_IPV4_FRAG_POLICY);
         root_vals.push_back(cbor_value::make_uint(sum.ipv4_frag_drop ? CSA_FORBID : CSA_LET));
+    }
+
+    if (v_encap)
+    {
+        root_keys.push_back(CSK_IPV4_ENCAP_POLICY);
+        root_vals.push_back(cbor_value::make_uint(sum.ipv4_encap_drop ? CSA_FORBID : CSA_LET));
     }
 
     root_keys.push_back(CSK_RULES);
@@ -373,6 +391,7 @@ std::string policy_aware_text(const policy_summary &sum)
     oss << "rules: " << sum.rule_count << "\n";
     oss << "icmp: " << (sum.icmp_forbid ? "forbid" : "let") << "\n";
     oss << "ipv4_frag: " << (sum.ipv4_frag_drop ? "drop" : "let") << "\n";
+    oss << "ipv4_encap: " << (sum.ipv4_encap_drop ? "drop" : "let") << "\n";
     oss << "tcp_forbidden: " << ranges_to_text(sum.tcp_forbid) << "\n";
     oss << "udp_forbidden: " << ranges_to_text(sum.udp_forbid) << "\n";
     return oss.str();

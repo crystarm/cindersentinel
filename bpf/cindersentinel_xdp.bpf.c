@@ -1,5 +1,6 @@
 #include "cindersentinel_common.h"
 
+
 SEC("xdp")
 int cindersentinel_xdp(struct xdp_md *packet_context)
 {
