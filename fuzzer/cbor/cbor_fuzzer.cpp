@@ -63,6 +63,16 @@ static std::string hex_dump(const uint8_t *data, size_t len)
     return out;
 }
 
+static int get_ada_timeout_ms()
+{
+    const char *env = std::getenv("CINDERSENTINEL_AEGIS_TIMEOUT_MS");
+    if (!env || !*env) return 1000;
+    char *end = nullptr;
+    long v = std::strtol(env, &end, 10);
+    if (end == env || v <= 0 || v > 600000) return 1000;
+    return (int)v;
+}
+
 static bool write_all_fd(int fd, const uint8_t *p, size_t n)
 {
     while (n)
@@ -207,6 +217,7 @@ static AdaResult run_ada_validator(const uint8_t *data, size_t len, int timeout_
         if (elapsed_ms > timeout_ms)
         {
             res.timeout = true;
+            output = "aegis: timeout";
             ::kill(pid, SIGKILL);
             ::waitpid(pid, &status, 0);
             break;
@@ -270,7 +281,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     bool cpp_ok = (rc == 0);
     std::string cpp_err = cpp_ok ? std::string() : (err_buf[0] ? std::string(err_buf) : std::string("validation failed"));
 
-    AdaResult ada = run_ada_validator(data, size, 1000);
+    AdaResult ada = run_ada_validator(data, size, get_ada_timeout_ms());
 
     if (ada.timeout)
     {

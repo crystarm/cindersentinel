@@ -85,5 +85,12 @@ cmake -S "${ROOT_DIR}" -B "${BUILD_HOST_DIR}" \
   -DCLANG="${want_bpf_clang}"
 cmake --build "${BUILD_HOST_DIR}" -j
 
+if command -v gnatmake >/dev/null 2>&1; then
+  log_info "GNAT detected, building Ada validator"
+  gnatmake -gnat2012 -O2 -o "${BUILD_HOST_DIR}/cindersentinel-aegis-ada" "${ROOT_DIR}/aegis/src/cindersentinel_aegis.adb"
+else
+  log_warn "GNAT not found; skipping Ada validator build"
+fi
+
 log_info "Built host: ${HOST_BIN}"
 log_info "Built cli:  ${CLI_BIN}"

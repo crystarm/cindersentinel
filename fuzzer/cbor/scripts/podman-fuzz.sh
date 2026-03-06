@@ -24,6 +24,8 @@ Fuzzing options (env):
   FUZZ_CORPUS_DIR     Runtime corpus directory (default: fuzzer/cbor/corpus.run)
   FUZZ_ARTIFACT_DIR   Crash artifacts directory (default: fuzzer/cbor/artifacts)
   FUZZ_ARGS           Extra libFuzzer args (default: empty)
+  CINDERSENTINEL_AEGIS  Path to Ada validator (required; default: build-host/cindersentinel-aegis-ada)
+  CINDERSENTINEL_AEGIS_TIMEOUT_MS  Ada validator timeout in ms (default: 1000)
 
 Repro options (env):
   REPRO_INPUT         Input file to reproduce (required for run-repro)
@@ -98,6 +100,7 @@ build_image() {
         cmake make pkg-config \
         clang lld llvm \
         g++ \
+        gnat \
         libssl-dev \
         libbpf-dev libelf-dev zlib1g-dev \
         dpkg-dev \
@@ -128,6 +131,7 @@ run_fuzz() {
         cmake make pkg-config \
         clang lld llvm \
         g++ \
+        gnat \
         libssl-dev \
         libbpf-dev libelf-dev zlib1g-dev \
         dpkg-dev \
@@ -136,9 +140,15 @@ run_fuzz() {
       cmake -S . -B build-host -DENABLE_FUZZERS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
       cmake --build build-host -j
 
+      gnatmake -gnat2012 -O2 -o build-host/cindersentinel-aegis-ada aegis/src/cindersentinel_aegis.adb
+
       export ASAN_OPTIONS=\"\${ASAN_OPTIONS:-abort_on_error=1:halt_on_error=1:detect_leaks=0:allocator_may_return_null=1}\"
       export UBSAN_OPTIONS=\"\${UBSAN_OPTIONS:-halt_on_error=1:print_stacktrace=1}\"
-      export CINDERSENTINEL_AEGIS=\"\${CINDERSENTINEL_AEGIS:-${WORKDIR}/build-host/cindersentinel-aegis}\"
+      export CINDERSENTINEL_AEGIS=\"\${CINDERSENTINEL_AEGIS:-${WORKDIR}/build-host/cindersentinel-aegis-ada}\"
+      if [[ ! -x \"\${CINDERSENTINEL_AEGIS}\" ]]; then
+        echo \"error: Ada validator not found: \${CINDERSENTINEL_AEGIS}\" >&2
+        exit 2
+      fi
 
       mkdir -p \"${FUZZ_CORPUS_DIR}\" \"${FUZZ_ARTIFACT_DIR}\"
 
@@ -179,6 +189,7 @@ run_repro() {
         cmake make pkg-config \
         clang lld llvm \
         g++ \
+        gnat \
         libssl-dev \
         libbpf-dev libelf-dev zlib1g-dev \
         dpkg-dev \
@@ -187,9 +198,15 @@ run_repro() {
       cmake -S . -B build-host -DENABLE_FUZZERS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
       cmake --build build-host -j
 
+      gnatmake -gnat2012 -O2 -o build-host/cindersentinel-aegis-ada aegis/src/cindersentinel_aegis.adb
+
       export ASAN_OPTIONS=\"\${ASAN_OPTIONS:-abort_on_error=1:halt_on_error=1:detect_leaks=0:allocator_may_return_null=1}\"
       export UBSAN_OPTIONS=\"\${UBSAN_OPTIONS:-halt_on_error=1:print_stacktrace=1}\"
-      export CINDERSENTINEL_AEGIS=\"\${CINDERSENTINEL_AEGIS:-${WORKDIR}/build-host/cindersentinel-aegis}\"
+      export CINDERSENTINEL_AEGIS=\"\${CINDERSENTINEL_AEGIS:-${WORKDIR}/build-host/cindersentinel-aegis-ada}\"
+      if [[ ! -x \"\${CINDERSENTINEL_AEGIS}\" ]]; then
+        echo \"error: Ada validator not found: \${CINDERSENTINEL_AEGIS}\" >&2
+        exit 2
+      fi
 
       ./build-host/cindersentinel-cbor-fuzzer -runs=1 \"${REPRO_INPUT}\"
 
@@ -218,6 +235,7 @@ run_cov() {
         cmake make pkg-config \
         clang lld llvm \
         g++ \
+        gnat \
         libssl-dev \
         libbpf-dev libelf-dev zlib1g-dev \
         dpkg-dev \
@@ -228,9 +246,15 @@ run_cov() {
         -DCMAKE_CXX_FLAGS='-fprofile-instr-generate -fcoverage-mapping'
       cmake --build build-host -j
 
+      gnatmake -gnat2012 -O2 -o build-host/cindersentinel-aegis-ada aegis/src/cindersentinel_aegis.adb
+
       export ASAN_OPTIONS=\"\${ASAN_OPTIONS:-abort_on_error=1:halt_on_error=1:detect_leaks=0:allocator_may_return_null=1}\"
       export UBSAN_OPTIONS=\"\${UBSAN_OPTIONS:-halt_on_error=1:print_stacktrace=1}\"
-      export CINDERSENTINEL_AEGIS=\"\${CINDERSENTINEL_AEGIS:-${WORKDIR}/build-host/cindersentinel-aegis}\"
+      export CINDERSENTINEL_AEGIS=\"\${CINDERSENTINEL_AEGIS:-${WORKDIR}/build-host/cindersentinel-aegis-ada}\"
+      if [[ ! -x \"\${CINDERSENTINEL_AEGIS}\" ]]; then
+        echo \"error: Ada validator not found: \${CINDERSENTINEL_AEGIS}\" >&2
+        exit 2
+      fi
 
       mkdir -p \"${COV_PROFILE_DIR}\" \"${COV_OUT_DIR}\"
 

@@ -9,12 +9,12 @@ Reproduce a crashing/mismatching input for cindersentinel-cbor-fuzzer.
 
 Defaults:
   - Looks for fuzzer binary in ./build-host/cindersentinel-cbor-fuzzer
-  - Uses ./build-host/cindersentinel-aegis (if present) as Ada validator
+  - Uses ./build-host/cindersentinel-aegis-ada (required) as Ada validator
   - Runs with -runs=1
 
 Env overrides:
   FUZZER_BIN=...        Path to cindersentinel-cbor-fuzzer
-  AEGIS_BIN=...         Path to cindersentinel-aegis (exported as CINDERSENTINEL_AEGIS)
+  AEGIS_BIN=...         Path to cindersentinel-aegis-ada (exported as CINDERSENTINEL_AEGIS)
   ASAN_OPTIONS=...      ASAN runtime options
   UBSAN_OPTIONS=...     UBSAN runtime options
 
@@ -45,7 +45,7 @@ fi
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 fuzzer_bin_default="${root_dir}/build-host/cindersentinel-cbor-fuzzer"
-aegis_bin_default="${root_dir}/build-host/cindersentinel-aegis"
+aegis_bin_default="${root_dir}/build-host/cindersentinel-aegis-ada"
 
 fuzzer_bin="${FUZZER_BIN:-$fuzzer_bin_default}"
 aegis_bin="${AEGIS_BIN:-$aegis_bin_default}"
@@ -56,9 +56,11 @@ if [[ ! -x "$fuzzer_bin" ]]; then
   exit 2
 fi
 
-if [[ -x "$aegis_bin" ]]; then
-  export CINDERSENTINEL_AEGIS="$aegis_bin"
+if [[ ! -x "$aegis_bin" ]]; then
+  echo "repro: Ada validator not found or not executable: $aegis_bin" >&2
+  exit 2
 fi
+export CINDERSENTINEL_AEGIS="$aegis_bin"
 
 export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:halt_on_error=1:detect_leaks=0:allocator_may_return_null=1}"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=1:print_stacktrace=1}"
