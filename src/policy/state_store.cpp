@@ -288,7 +288,6 @@ int state_store::read_active(active_info &out, state_error &err) const
     }
 
     std::string blob = policies_dir() + "/" + a.sha256 + ".cbor";
-    struct stat st;
     if (::stat(blob.c_str(), &st) != 0)
     {
         return set_err(err, "active sha256 blob not found: " + blob);
