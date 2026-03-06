@@ -1,4 +1,6 @@
 
+fuzzer/cbor/corpus*/*
+
 logs*/*
 
 build*/*
