@@ -20,8 +20,8 @@ jobs:
 
       - name: Build in debian container
         run: |
-          chmod +x scripts/ci/build-podman.sh
-          scripts/ci/build-podman.sh
+          chmod +x scripts/ci/podman-build.sh
+          scripts/ci/podman-build.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

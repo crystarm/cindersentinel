@@ -264,8 +264,6 @@ def policy_bytes(entries: List[Tuple[int, bytes]], canonical: bool = True) -> by
     return enc_map(entries, canonical=canonical)
 
 
-# ---- Seed generation ----
-
 def add_seed(seeds: List[Tuple[str, bytes]], name: str, data: bytes) -> None:
     seeds.append((name, data))
 
