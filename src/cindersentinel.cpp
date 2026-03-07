@@ -22,12 +22,13 @@
 #include "policy/hash.h"
 #include "policy/state_store.h"
 #include "policy/apply.h"
+#include "policy/policy.h"
 
 #include "maps/maps.h"
+#include "runtime/runtime.h"
 #include "io_utils/io_utils.h"
 
 using cs::io_utils::die;
-using cs::io_utils::read_file_all;
 using cs::io_utils::write_all_fd;
 
 using cs::maps::dump_port_set;
@@ -117,225 +118,9 @@ static void maybe_reexec_with_sudo(int argc, char **argv)
 
 
 
-static bool is_alias(const std::string &s, const std::initializer_list<const char *> xs)
-{
-    for (auto x : xs) if (s == x) return true;
-    return false;
-}
-
-enum class runtime_backend
-{
-    tc,
-    xdp,
-    all,
-};
-
-struct runtime_opts
-{
-    std::string iface;
-    runtime_backend backend = runtime_backend::all;
-    std::string pin_base = "/sys/fs/bpf/cindersentinel";
-    std::string state_root = "/var/lib/cindersentinel";
-};
-
-static bool parse_backend_value(const std::string &s, runtime_backend &out)
-{
-    if (s == "tc")
-    {
-        out = runtime_backend::tc;
-        return true;
-    }
-    if (s == "xdp")
-    {
-        out = runtime_backend::xdp;
-        return true;
-    }
-    if (s == "all")
-    {
-        out = runtime_backend::all;
-        return true;
-    }
-    return false;
-}
-
-static void parse_runtime_opts(int argc, char **argv, int start,
-                               runtime_opts &out,
-                               std::vector<std::string> &rest)
-{
-    for (int i = start; i < argc; ++i)
-    {
-        std::string a = argv[i];
-        if (a == "--iface")
-        {
-            if (i + 1 >= argc) die("--iface requires value");
-            out.iface = argv[++i];
-        }
-        else if (a == "--backend")
-        {
-            if (i + 1 >= argc) die("--backend requires value");
-            runtime_backend b;
-            if (!parse_backend_value(argv[i + 1], b))
-                die("bad --backend value (expected: tc|xdp|all)");
-            out.backend = b;
-            ++i;
-        }
-        else if (a == "--pin-base")
-        {
-            if (i + 1 >= argc) die("--pin-base requires value");
-            out.pin_base = argv[++i];
-        }
-        else if (a == "--state-root")
-        {
-            if (i + 1 >= argc) die("--state-root requires value");
-            out.state_root = argv[++i];
-        }
-        else
-        {
-            rest.push_back(a);
-        }
-    }
-}
-
-
-
-static uint64_t now_ms()
-{
-    using namespace std::chrono;
-    return (uint64_t)duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-}
-
-static void apply_summary_to_maps(const cs::maps_fds &maps,
-                                  const cs::policy_summary &sum,
-                                  const char *ctx)
-{
-    cs::apply_limits lim;
-    cs::apply_error ae;
-    cs::runtime_state old_state;
-    cs::runtime_state new_state;
-
-    if (cs::read_runtime_state(maps, old_state, ae) != 0)
-        die(std::string(ctx) + ": " + ae.msg);
-    if (cs::summary_to_runtime_state(sum, new_state, lim, ae) != 0)
-        die(std::string(ctx) + ": " + ae.msg);
-    if (cs::apply_delta(maps, old_state, new_state, ae) != 0)
-        die(std::string(ctx) + ": " + ae.msg);
-}
-
-struct backend_view
-{
-    const char *label;
-    const cs::maps_fds *fds;
-};
-
-static void apply_summary_to_backends_atomic(const std::vector<backend_view> &backends,
-                                             const cs::policy_summary &sum,
-                                             const char *ctx)
-{
-    cs::apply_limits lim;
-    cs::apply_error ae;
-    cs::runtime_state new_state;
-
-    if (cs::summary_to_runtime_state(sum, new_state, lim, ae) != 0)
-        die(std::string(ctx) + ": " + ae.msg);
-
-    struct backend_state
-    {
-        const char *label;
-        const cs::maps_fds *fds;
-        cs::runtime_state old_state;
-        bool applied = false;
-    };
-
-    std::vector<backend_state> states;
-    states.reserve(backends.size());
-
-    for (const auto &b : backends)
-    {
-        backend_state st { b.label, b.fds, {}, false };
-        if (cs::read_runtime_state(*b.fds, st.old_state, ae) != 0)
-            die(std::string(ctx) + ": " + ae.msg);
-        states.push_back(std::move(st));
-    }
-
-    for (auto &st : states)
-    {
-        if (cs::apply_delta(*st.fds, st.old_state, new_state, ae) != 0)
-        {
-            for (auto &rb : states)
-            {
-                if (!rb.applied) break;
-                (void)cs::apply_delta(*rb.fds, new_state, rb.old_state, ae);
-            }
-            die(std::string(ctx) + ": " + ae.msg);
-        }
-        st.applied = true;
-    }
-}
-
-
-
-static bool runtime_state_equal(const cs::runtime_state &a, const cs::runtime_state &b)
-{
-    return a.icmp_forbid == b.icmp_forbid &&
-           a.ipv4_frag_drop == b.ipv4_frag_drop &&
-           a.ipv4_encap_drop == b.ipv4_encap_drop &&
-           a.tcp_forbidden_ports == b.tcp_forbidden_ports &&
-           a.udp_forbidden_ports == b.udp_forbidden_ports;
-}
-
-static void sync_runtime_to_state(const runtime_opts &rt,
-                                  const std::vector<backend_view> &backends,
-                                  const std::string &source)
-{
-    if (backends.empty()) die("sync: no backends available");
-
-    cs::state_store_opts so;
-    so.state_root = rt.state_root;
-    cs::state_store store(so, rt.iface);
-
-    cs::state_error se;
-    if (store.ensure_dirs(se) != 0) die("state: " + se.msg);
-
-    cs::state_lock lk;
-    if (store.lock_exclusive(lk, se) != 0) die("state: " + se.msg);
-
-    cs::apply_error ae;
-    cs::runtime_state st;
-    if (cs::read_runtime_state(*backends[0].fds, st, ae) != 0)
-        die("state: " + ae.msg);
-
-    for (size_t i = 1; i < backends.size(); ++i)
-    {
-        cs::runtime_state other;
-        if (cs::read_runtime_state(*backends[i].fds, other, ae) != 0)
-            die("state: " + ae.msg);
-        if (!runtime_state_equal(st, other))
-            die("state: backend states differ; refusing to sync");
-    }
-
-    std::vector<uint8_t> canon;
-    cs::policy_summary sum;
-    if (cs::build_policy_from_runtime(st, canon, sum, ae) != 0)
-        die("state: " + ae.msg);
-
-    std::string hash = cs::sha256_hex(canon);
-    if (store.store_policy_blob(hash, canon, se) != 0) die("state: " + se.msg);
-
-    std::vector<std::string> hist;
-    if (store.read_history(hist, se) != 0) die("state: " + se.msg);
-    store.history_push(hist, hash);
-    if (store.write_history(hist, se) != 0) die("state: " + se.msg);
-
-    cs::active_info ai;
-    ai.sha256 = hash;
-    ai.kind = sum.kind;
-    ai.v = sum.v;
-    ai.updated_at_ms = now_ms();
-    ai.source = source;
-    if (store.write_active(ai, se) != 0) die("state: " + se.msg);
-
-    std::cout << "synced: " << hash << "\n";
-}
+using runtime_backend = cs::runtime::runtime_backend;
+using runtime_opts = cs::runtime::runtime_opts;
+using backend_view = cs::runtime::backend_view;
 
 
 
@@ -613,7 +398,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             return;
         }
 
-        if (is_alias(act, {"drop","forbid","on"}))
+        if (cs::runtime::is_alias(act, {"drop","forbid","on"}))
         {
             apply_mutation_atomic([&](cs::runtime_state &st)
             {
@@ -621,7 +406,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             }, "etch ipv4_frag");
             mutated = true;
         }
-        else if (is_alias(act, {"let","pass","off"}))
+        else if (cs::runtime::is_alias(act, {"let","pass","off"}))
         {
             apply_mutation_atomic([&](cs::runtime_state &st)
             {
@@ -639,7 +424,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             std::vector<backend_view> views;
             views.reserve(backends.size());
             for (auto &b : backends) views.push_back({b.label, b.fds});
-            sync_runtime_to_state(rt, views, "etch");
+            cs::runtime::sync_runtime_to_state(rt, views, "etch");
         }
         return;
     }
@@ -659,7 +444,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             return;
         }
 
-        if (is_alias(act, {"drop","forbid","on"}))
+        if (cs::runtime::is_alias(act, {"drop","forbid","on"}))
         {
             apply_mutation_atomic([&](cs::runtime_state &st)
             {
@@ -667,7 +452,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             }, "etch ipv4_encap");
             mutated = true;
         }
-        else if (is_alias(act, {"let","pass","off"}))
+        else if (cs::runtime::is_alias(act, {"let","pass","off"}))
         {
             apply_mutation_atomic([&](cs::runtime_state &st)
             {
@@ -685,7 +470,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             std::vector<backend_view> views;
             views.reserve(backends.size());
             for (auto &b : backends) views.push_back({b.label, b.fds});
-            sync_runtime_to_state(rt, views, "etch");
+            cs::runtime::sync_runtime_to_state(rt, views, "etch");
         }
         return;
     }
@@ -705,7 +490,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             return;
         }
 
-        if (is_alias(act, {"forbid","on"}))
+        if (cs::runtime::is_alias(act, {"forbid","on"}))
         {
             apply_mutation_atomic([&](cs::runtime_state &st)
             {
@@ -713,7 +498,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             }, "etch icmp");
             mutated = true;
         }
-        else if (is_alias(act, {"let","off"}))
+        else if (cs::runtime::is_alias(act, {"let","off"}))
         {
             apply_mutation_atomic([&](cs::runtime_state &st)
             {
@@ -731,7 +516,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
             std::vector<backend_view> views;
             views.reserve(backends.size());
             for (auto &b : backends) views.push_back({b.label, b.fds});
-            sync_runtime_to_state(rt, views, "etch");
+            cs::runtime::sync_runtime_to_state(rt, views, "etch");
         }
         return;
     }
@@ -752,11 +537,11 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
     uint16_t port = parse_port(args[2]);
 
     bool forbid = false;
-    if (is_alias(act, {"forbid","block"}))
+    if (cs::runtime::is_alias(act, {"forbid","block"}))
     {
         forbid = true;
     }
-    else if (is_alias(act, {"let","unblock"}))
+    else if (cs::runtime::is_alias(act, {"let","unblock"}))
     {
         forbid = false;
     }
@@ -786,7 +571,7 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
         std::vector<backend_view> views;
         views.reserve(backends.size());
         for (auto &b : backends) views.push_back({b.label, b.fds});
-        sync_runtime_to_state(rt, views, "etch");
+        cs::runtime::sync_runtime_to_state(rt, views, "etch");
     }
 }
 
@@ -810,17 +595,12 @@ static void cmd_try(int argc, char **argv)
         }
     }
 
-    auto bytes = read_file_all(in_path);
-
+    std::vector<uint8_t> bytes;
     std::vector<uint8_t> canon;
     cs::policy_summary sum;
-    cs::policy_error err;
-    if (!cs::policy_parse_validate_canonical(bytes, canon, sum, err))
-        die("policy invalid: " + err.msg);
-
+    bool same = false;
+    cs::policy::load_and_canonicalize_policy(in_path, bytes, canon, sum, same);
     run_aegis_gate(canon);
-
-    bool same = (bytes == canon);
 
     if (!out_path.empty())
     {
@@ -845,13 +625,10 @@ static void cmd_gate(int argc, char **argv)
     if (argc > 1) die("gate: unknown arg: " + std::string(argv[1]));
 
     std::string in_path = argv[0];
-    auto bytes = read_file_all(in_path);
 
     std::vector<uint8_t> canon;
-    cs::policy_summary sum;
-    cs::policy_error err;
-    if (!cs::policy_parse_validate_canonical(bytes, canon, sum, err))
-        die("policy invalid: " + err.msg);
+    [[maybe_unused]] cs::policy_summary sum;
+    cs::policy::load_canonical_policy(in_path, canon, sum);
 
     run_aegis_gate(canon);
 
@@ -864,13 +641,10 @@ static void cmd_invoke(const runtime_opts &rt, const std::vector<std::string> &a
     if (args.size() > 1) die("invoke: unknown arg: " + args[1]);
 
     std::string in_path = args[0];
-    auto bytes = read_file_all(in_path);
 
     std::vector<uint8_t> canon;
     cs::policy_summary sum;
-    cs::policy_error pe;
-    if (!cs::policy_parse_validate_canonical(bytes, canon, sum, pe))
-        die("policy invalid: " + pe.msg);
+    cs::policy::load_canonical_policy(in_path, canon, sum);
 
     run_aegis_gate(canon);
 
@@ -920,12 +694,12 @@ static void cmd_invoke(const runtime_opts &rt, const std::vector<std::string> &a
         views.reserve(2);
         if (have_tc) views.push_back({"tc", &tc_fds});
         if (have_xdp) views.push_back({"xdp", &xdp_fds});
-        apply_summary_to_backends_atomic(views, sum, "invoke(all)");
+        cs::runtime::apply_summary_to_backends_atomic(views, sum, "invoke(all)");
     }
     else
     {
-        if (have_tc) apply_summary_to_maps(tc_fds, sum, "invoke(tc)");
-        if (have_xdp) apply_summary_to_maps(xdp_fds, sum, "invoke(xdp)");
+        if (have_tc) cs::runtime::apply_summary_to_maps(tc_fds, sum, "invoke(tc)");
+        if (have_xdp) cs::runtime::apply_summary_to_maps(xdp_fds, sum, "invoke(xdp)");
     }
 
     std::vector<std::string> hist;
@@ -937,7 +711,7 @@ static void cmd_invoke(const runtime_opts &rt, const std::vector<std::string> &a
     ai.sha256 = hash;
     ai.kind = sum.kind;
     ai.v = sum.v;
-    ai.updated_at_ms = now_ms();
+    ai.updated_at_ms = cs::runtime::now_ms();
     ai.source = "invoke";
     if (store.write_active(ai, se) != 0) die("state: " + se.msg);
 
@@ -1027,12 +801,12 @@ static void cmd_stepback(const runtime_opts &rt, const std::vector<std::string> 
         views.reserve(2);
         if (have_tc) views.push_back({"tc", &tc_fds});
         if (have_xdp) views.push_back({"xdp", &xdp_fds});
-        apply_summary_to_backends_atomic(views, sum, "stepback(all)");
+        cs::runtime::apply_summary_to_backends_atomic(views, sum, "stepback(all)");
     }
     else
     {
-        if (have_tc) apply_summary_to_maps(tc_fds, sum, "stepback(tc)");
-        if (have_xdp) apply_summary_to_maps(xdp_fds, sum, "stepback(xdp)");
+        if (have_tc) cs::runtime::apply_summary_to_maps(tc_fds, sum, "stepback(tc)");
+        if (have_xdp) cs::runtime::apply_summary_to_maps(xdp_fds, sum, "stepback(xdp)");
     }
 
     if (store.write_history(hist, se) != 0) die("state: " + se.msg);
@@ -1041,7 +815,7 @@ static void cmd_stepback(const runtime_opts &rt, const std::vector<std::string> 
     ai.sha256 = hash;
     ai.kind = sum.kind;
     ai.v = sum.v;
-    ai.updated_at_ms = now_ms();
+    ai.updated_at_ms = cs::runtime::now_ms();
     ai.source = "stepback";
     if (store.write_active(ai, se) != 0) die("state: " + se.msg);
 
@@ -1053,15 +827,12 @@ static void cmd_aware(int argc, char **argv)
 {
     if (argc < 1) die("aware: missing <policy.cbor>");
     std::string in_path = argv[0];
-    auto bytes = read_file_all(in_path);
-
+    std::vector<uint8_t> bytes;
     std::vector<uint8_t> canon;
     cs::policy_summary sum;
-    cs::policy_error err;
-    if (!cs::policy_parse_validate_canonical(bytes, canon, sum, err))
-        die("policy invalid: " + err.msg);
+    bool same = false;
+    cs::policy::load_and_canonicalize_policy(in_path, bytes, canon, sum, same);
 
-    bool same = (bytes == canon);
     if (!same)
         std::cout << "warning: input is not canonical (use: try <in> --out <out.cbor>)\n";
 
@@ -1102,7 +873,7 @@ int main(int argc, char **argv)
     {
         runtime_opts rt;
         std::vector<std::string> rest;
-        parse_runtime_opts(argc, argv, 2, rt, rest);
+        cs::runtime::parse_runtime_opts(argc, argv, 2, rt, rest);
         if (rt.iface.empty()) die("aura: --iface is required");
         if (!rest.empty()) die("unknown aura arg: " + rest[0]);
         cmd_aura(rt);
@@ -1112,7 +883,7 @@ int main(int argc, char **argv)
     {
         runtime_opts rt;
         std::vector<std::string> rest;
-        parse_runtime_opts(argc, argv, 2, rt, rest);
+        cs::runtime::parse_runtime_opts(argc, argv, 2, rt, rest);
         if (rt.iface.empty()) die("embers: --iface is required");
         cmd_embers(rt, rest);
         return 0;
@@ -1121,7 +892,7 @@ int main(int argc, char **argv)
     {
         runtime_opts rt;
         std::vector<std::string> rest;
-        parse_runtime_opts(argc, argv, 2, rt, rest);
+        cs::runtime::parse_runtime_opts(argc, argv, 2, rt, rest);
         if (rt.iface.empty()) die("etch: --iface is required");
         cmd_etch(rt, rest);
         return 0;
@@ -1151,7 +922,7 @@ int main(int argc, char **argv)
     {
         runtime_opts rt;
         std::vector<std::string> rest;
-        parse_runtime_opts(argc, argv, 2, rt, rest);
+        cs::runtime::parse_runtime_opts(argc, argv, 2, rt, rest);
         if (rt.iface.empty()) die("invoke: --iface is required");
         cmd_invoke(rt, rest);
         return 0;
@@ -1160,7 +931,7 @@ int main(int argc, char **argv)
     {
         runtime_opts rt;
         std::vector<std::string> rest;
-        parse_runtime_opts(argc, argv, 2, rt, rest);
+        cs::runtime::parse_runtime_opts(argc, argv, 2, rt, rest);
         if (rt.iface.empty()) die("stepback: --iface is required");
         cmd_stepback(rt, rest);
         return 0;

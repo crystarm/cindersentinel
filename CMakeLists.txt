@@ -60,12 +60,14 @@ add_executable(cindersentinel
     src/cindersentinel.cpp
     src/io_utils/io_utils.cpp
     src/maps/maps.cpp
+    src/runtime/runtime.cpp
     src/policy/cbor.cpp
     src/policy/scheme.cpp
     src/policy/hash.cpp
     src/policy/state_store.cpp
     src/policy/maps_pins.cpp
     src/policy/apply.cpp
+    src/policy/policy.cpp
 )
 
 target_include_directories(cindersentinel PRIVATE
