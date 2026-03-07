@@ -22,10 +22,12 @@ procedure Cindersentinel_Aegis is
    Max_Total_Ops             : constant Natural := 200_000;
 
    -- policy/keys.h equivalents
-   CSK_KIND            : constant Unsigned_64 := 1;
-   CSK_V               : constant Unsigned_64 := 2;
-   CSK_DEFAULT_ACTION  : constant Unsigned_64 := 3;
-   CSK_RULES           : constant Unsigned_64 := 4;
+   CSK_KIND               : constant Unsigned_64 := 1;
+   CSK_V                  : constant Unsigned_64 := 2;
+   CSK_DEFAULT_ACTION     : constant Unsigned_64 := 3;
+   CSK_RULES              : constant Unsigned_64 := 4;
+   CSK_IPV4_FRAG_POLICY   : constant Unsigned_64 := 5;
+   CSK_IPV4_ENCAP_POLICY  : constant Unsigned_64 := 6;
 
    CSR_ACTION          : constant Unsigned_64 := 1;
    CSR_PROTO           : constant Unsigned_64 := 2;
@@ -285,14 +287,16 @@ procedure Cindersentinel_Aegis is
          end if;
 
          declare
-            Rule_Len : constant Natural := Read_Map_Len (P);
-            Last_Key : Unsigned_64 := 0;
-            Have_Key : Boolean := False;
-            Action   : Unsigned_64 := 0;
-            Proto    : Unsigned_64 := 0;
+            Rule_Len   : constant Natural := Read_Map_Len (P);
+            Last_Key   : Unsigned_64 := 0;
+            Have_Key   : Boolean := False;
+            Action     : Unsigned_64 := 0;
+            Proto      : Unsigned_64 := 0;
             Has_Action : Boolean := False;
             Has_Proto  : Boolean := False;
             Has_Dports : Boolean := False;
+            Dports_Len : Natural := 0;
+            Tmp_Ranges : Range_List;
          begin
             Inc_Depth (P);
             for K in 1 .. Rule_Len loop
@@ -313,20 +317,15 @@ procedure Cindersentinel_Aegis is
                      Has_Proto := True;
                   elsif Key = CSR_DPORTS then
                      Has_Dports := True;
-                     -- dports array
                      if Peek_Major (P) /= 4 then
                         Fail ("dports must be array");
                      end if;
-                     declare
-                        DLen : constant Natural := Read_Array_Len (P);
-                     begin
-                        if DLen = 0 then
-                           -- allow empty for icmp check later
-                           null;
-                        end if;
 
+                     Dports_Len := Read_Array_Len (P);
+
+                     if Dports_Len > 0 then
                         Inc_Depth (P);
-                        for J in 1 .. DLen loop
+                        for J in 1 .. Dports_Len loop
                            if Peek_Major (P) = 0 then
                               declare
                                  Port : constant Unsigned_64 := Read_UInt (P);
@@ -334,11 +333,7 @@ procedure Cindersentinel_Aegis is
                                  if Port < 1 or else Port > 65535 then
                                     Fail ("port out of range");
                                  end if;
-                                 if Proto = CSP_TCP then
-                                    Append_Range (Tcp, (Unsigned_16 (Port), Unsigned_16 (Port)));
-                                 elsif Proto = CSP_UDP then
-                                    Append_Range (Udp, (Unsigned_16 (Port), Unsigned_16 (Port)));
-                                 end if;
+                                 Append_Range (Tmp_Ranges, (Unsigned_16 (Port), Unsigned_16 (Port)));
                               end;
                            elsif Peek_Major (P) = 4 then
                               declare
@@ -355,11 +350,7 @@ procedure Cindersentinel_Aegis is
                                     if Lo < 1 or else Hi < 1 or else Lo > 65535 or else Hi > 65535 or else Lo > Hi then
                                        Fail ("bad port range");
                                     end if;
-                                    if Proto = CSP_TCP then
-                                       Append_Range (Tcp, (Unsigned_16 (Lo), Unsigned_16 (Hi)));
-                                    elsif Proto = CSP_UDP then
-                                       Append_Range (Udp, (Unsigned_16 (Lo), Unsigned_16 (Hi)));
-                                    end if;
+                                    Append_Range (Tmp_Ranges, (Unsigned_16 (Lo), Unsigned_16 (Hi)));
                                  end;
                               end;
                            else
@@ -367,9 +358,8 @@ procedure Cindersentinel_Aegis is
                            end if;
                         end loop;
                         Dec_Depth (P);
-                     end;
+                     end if;
                   else
-                     -- unknown field
                      Fail ("unknown rule field");
                   end if;
                end;
@@ -392,13 +382,23 @@ procedure Cindersentinel_Aegis is
 
             if Proto = CSP_ICMP then
                if Has_Dports then
-                  -- allow only empty array earlier; if non-empty, we would have added ranges
-                  null;
+                  Fail ("icmp rule must not have dports (field must be absent)");
                end if;
             else
                if not Has_Dports then
                   Fail ("tcp/udp rule must have dports");
                end if;
+               if Dports_Len = 0 then
+                  Fail ("dports must be non-empty");
+               end if;
+
+               for J in 1 .. Tmp_Ranges.Len loop
+                  if Proto = CSP_TCP then
+                     Append_Range (Tcp, Tmp_Ranges.Data (J));
+                  else
+                     Append_Range (Udp, Tmp_Ranges.Data (J));
+                  end if;
+               end loop;
             end if;
          end;
       end loop;
@@ -406,6 +406,7 @@ procedure Cindersentinel_Aegis is
    end Validate_Rules;
 
    procedure Sort_And_Check (L : in out Range_List; Label : String; Expanded_Limit : Natural; Total_Ops : in out Natural) is
+      pragma Unreferenced (Label);
    begin
       if L.Len = 0 then
          return;
@@ -427,16 +428,28 @@ procedure Cindersentinel_Aegis is
          end;
       end loop;
 
-      -- overlap check + expanded count
+      -- Merge overlap/adjacent ranges (C++ parity with normalize_ranges)
       declare
-         Prev_Hi : Unsigned_16 := L.Data (1).Hi;
-         Count   : Unsigned_64 := Unsigned_64 (L.Data (1).Hi) - Unsigned_64 (L.Data (1).Lo) + 1;
+         W : Natural := 1;
       begin
          for I in 2 .. L.Len loop
-            if L.Data (I).Lo <= Prev_Hi then
-               Fail ("conflicting " & Label & " ranges (overlap)");
+            if Unsigned_32 (L.Data (I).Lo) <= Unsigned_32 (L.Data (W).Hi) + 1 then
+               if L.Data (I).Hi > L.Data (W).Hi then
+                  L.Data (W).Hi := L.Data (I).Hi;
+               end if;
+            else
+               W := W + 1;
+               L.Data (W) := L.Data (I);
             end if;
-            Prev_Hi := L.Data (I).Hi;
+         end loop;
+         L.Len := W;
+      end;
+
+      -- expanded count + limits
+      declare
+         Count : Unsigned_64 := 0;
+      begin
+         for I in 1 .. L.Len loop
             Count := Count + Unsigned_64 (L.Data (I).Hi) - Unsigned_64 (L.Data (I).Lo) + 1;
             if Count > Unsigned_64 (Expanded_Limit) then
                Fail ("policy too wide: expanded ports exceed per-proto limit");
@@ -470,8 +483,12 @@ begin
       Has_Kind : Boolean := False;
       Has_V    : Boolean := False;
       Has_Rules: Boolean := False;
-      Def_Action : Unsigned_64 := 0;
-      Has_Def : Boolean := False;
+      Def_Action   : Unsigned_64 := 0;
+      Frag_Policy  : Unsigned_64 := 0;
+      Encap_Policy : Unsigned_64 := 0;
+      Has_Def      : Boolean := False;
+      Has_Frag     : Boolean := False;
+      Has_Encap    : Boolean := False;
 
       Tcp : Range_List;
       Udp : Range_List;
@@ -507,6 +524,12 @@ begin
             elsif Key = CSK_DEFAULT_ACTION then
                Def_Action := Read_UInt (P);
                Has_Def := True;
+            elsif Key = CSK_IPV4_FRAG_POLICY then
+               Frag_Policy := Read_UInt (P);
+               Has_Frag := True;
+            elsif Key = CSK_IPV4_ENCAP_POLICY then
+               Encap_Policy := Read_UInt (P);
+               Has_Encap := True;
             elsif Key = CSK_RULES then
                if Peek_Major (P) /= 4 then
                   Fail ("rules must be array");
@@ -543,7 +566,15 @@ begin
          Fail ("default_action forbid unsupported for now");
       end if;
 
-      -- Range conflicts & width
+      if Has_Frag and then Frag_Policy /= CSA_LET and then Frag_Policy /= CSA_FORBID then
+         Fail ("ipv4_frag_policy must be let|forbid");
+      end if;
+
+      if Has_Encap and then Encap_Policy /= CSA_LET and then Encap_Policy /= CSA_FORBID then
+         Fail ("ipv4_encap_policy must be let|forbid");
+      end if;
+
+      -- Normalize ranges and enforce width limits
       declare
          Total_Ops : Natural := 0;
       begin
