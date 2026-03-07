@@ -12,7 +12,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <initializer_list>
-#include <fstream>
+
 #include <iostream>
 #include <string>
 #include <vector>
@@ -22,47 +22,19 @@
 #include "policy/hash.h"
 #include "policy/state_store.h"
 #include "policy/apply.h"
-#include "policy/limits.h"
 
-static void die(const std::string &msg);
+#include "maps/maps.h"
+#include "io_utils/io_utils.h"
 
-static std::vector<uint8_t> read_file_all(const std::string &path)
-{
-    std::ifstream f(path, std::ios::binary);
-    if (!f) die("cannot open file: " + path);
-    f.seekg(0, std::ios::end);
-    std::streamoff sz = f.tellg();
-    if (sz < 0) die("cannot stat file: " + path);
-    if ((uint64_t)sz > (1ull << 20)) die("policy file too large (>1MiB): " + path);
-    f.seekg(0, std::ios::beg);
-    std::vector<uint8_t> b((size_t)sz);
-    if (sz && !f.read((char *)b.data(), sz)) die("read failed: " + path);
-    return b;
-}
+using cs::io_utils::die;
+using cs::io_utils::read_file_all;
+using cs::io_utils::write_all_fd;
 
-static void write_file_all(const std::string &path, const std::vector<uint8_t> &b)
-{
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) die("cannot write: " + path);
-    if (!b.empty()) f.write((const char *)b.data(), (std::streamsize)b.size());
-    if (!f) die("write failed: " + path);
-}
-
-static int write_all_fd(int fd, const uint8_t *p, size_t n)
-{
-    while (n)
-    {
-        ssize_t rc = ::write(fd, p, n);
-        if (rc < 0)
-        {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        p += (size_t)rc;
-        n -= (size_t)rc;
-    }
-    return 0;
-}
+using cs::maps::dump_port_set;
+using cs::maps::open_pinned_maps_for_backend;
+using cs::maps::parse_port;
+using cs::maps::print_ports_line;
+using cs::maps::read_percpu_sum_u64;
 
 static void run_aegis_gate(const std::vector<uint8_t> &canon)
 {
@@ -143,11 +115,7 @@ static void maybe_reexec_with_sudo(int argc, char **argv)
     exit(1);
 }
 
-static void die(const std::string &msg)
-{
-    std::cerr << "cindersentinel: " << msg << "\n";
-    exit(2);
-}
+
 
 static bool is_alias(const std::string &s, const std::initializer_list<const char *> xs)
 {
@@ -369,81 +337,7 @@ static void sync_runtime_to_state(const runtime_opts &rt,
     std::cout << "synced: " << hash << "\n";
 }
 
-static bool open_pinned_maps_for_backend(const runtime_opts &rt,
-                                         cs::cs_backend backend,
-                                         cs::maps_fds &out,
-                                         std::string &err)
-{
-    cs::maps_pins_opts opt;
-    opt.pin_base = rt.pin_base;
-    opt.iface = rt.iface;
-    opt.backend = backend;
 
-    cs::maps_error e;
-    if (cs::open_pinned_maps(opt, out, e) != 0)
-    {
-        err = e.msg;
-        return false;
-    }
-
-    return true;
-}
-
-static uint64_t read_percpu_sum_u64(int map_fd, uint32_t key)
-{
-    int cpu_count = libbpf_num_possible_cpus();
-    if (cpu_count <= 0) return 0;
-
-    std::vector<uint64_t> per_cpu((size_t)cpu_count, 0);
-    if (bpf_map_lookup_elem(map_fd, &key, per_cpu.data()) != 0) return 0;
-
-    uint64_t sum = 0;
-    for (int i = 0; i < cpu_count; ++i) sum += per_cpu[(size_t)i];
-    return sum;
-}
-
-static std::vector<uint16_t> dump_port_set(int map_fd)
-{
-    std::vector<uint16_t> ports;
-    uint8_t v = 0;
-
-    for (uint32_t key = 1; key < cs::CS_PORT_MAP_MAX; ++key)
-    {
-        if (bpf_map_lookup_elem(map_fd, &key, &v) == 0 && v != 0)
-        {
-            ports.push_back((uint16_t)key);
-        }
-    }
-
-    std::sort(ports.begin(), ports.end());
-    ports.erase(std::unique(ports.begin(), ports.end()), ports.end());
-    return ports;
-}
-
-static void print_ports_line(const std::string &title, const std::vector<uint16_t> &ports)
-{
-    std::cout << title;
-    if (ports.empty())
-    {
-        std::cout << "none\n";
-        return;
-    }
-    for (size_t i = 0; i < ports.size(); ++i)
-    {
-        if (i) std::cout << ",";
-        std::cout << ports[i];
-    }
-    std::cout << "\n";
-}
-
-static uint16_t parse_port(const std::string &s)
-{
-    char *end = nullptr;
-    long v = strtol(s.c_str(), &end, 10);
-    if (!s.size() || (end && *end)) die("bad port: " + s);
-    if (v < 1 || v > 65535) die("port out of range: " + s);
-    return (uint16_t)v;
-}
 
 static void cmd_aura_from_maps(const cs::maps_fds &fds, const char *label, bool show_label)
 {
@@ -480,9 +374,9 @@ static void cmd_aura(const runtime_opts &rt)
     std::string err_xdp;
 
     if (rt.backend == runtime_backend::tc || rt.backend == runtime_backend::all)
-        have_tc = open_pinned_maps_for_backend(rt, cs::cs_backend::TC, tc_fds, err_tc);
+        have_tc = open_pinned_maps_for_backend(rt.pin_base, rt.iface, cs::cs_backend::TC, tc_fds, err_tc);
     if (rt.backend == runtime_backend::xdp || rt.backend == runtime_backend::all)
-        have_xdp = open_pinned_maps_for_backend(rt, cs::cs_backend::XDP, xdp_fds, err_xdp);
+        have_xdp = open_pinned_maps_for_backend(rt.pin_base, rt.iface, cs::cs_backend::XDP, xdp_fds, err_xdp);
 
     if (rt.backend == runtime_backend::tc)
     {
@@ -566,9 +460,9 @@ static void cmd_embers(const runtime_opts &rt, const std::vector<std::string> &a
     std::string err_xdp;
 
     if (rt.backend == runtime_backend::tc || rt.backend == runtime_backend::all)
-        have_tc = open_pinned_maps_for_backend(rt, cs::cs_backend::TC, tc_fds, err_tc);
+        have_tc = open_pinned_maps_for_backend(rt.pin_base, rt.iface, cs::cs_backend::TC, tc_fds, err_tc);
     if (rt.backend == runtime_backend::xdp || rt.backend == runtime_backend::all)
-        have_xdp = open_pinned_maps_for_backend(rt, cs::cs_backend::XDP, xdp_fds, err_xdp);
+        have_xdp = open_pinned_maps_for_backend(rt.pin_base, rt.iface, cs::cs_backend::XDP, xdp_fds, err_xdp);
 
     if (rt.backend == runtime_backend::tc)
     {
@@ -633,9 +527,9 @@ static void cmd_etch(const runtime_opts &rt, const std::vector<std::string> &arg
     std::string err_xdp;
 
     if (rt.backend == runtime_backend::tc || rt.backend == runtime_backend::all)
-        have_tc = open_pinned_maps_for_backend(rt, cs::cs_backend::TC, tc_fds, err_tc);
+        have_tc = open_pinned_maps_for_backend(rt.pin_base, rt.iface, cs::cs_backend::TC, tc_fds, err_tc);
     if (rt.backend == runtime_backend::xdp || rt.backend == runtime_backend::all)
-        have_xdp = open_pinned_maps_for_backend(rt, cs::cs_backend::XDP, xdp_fds, err_xdp);
+        have_xdp = open_pinned_maps_for_backend(rt.pin_base, rt.iface, cs::cs_backend::XDP, xdp_fds, err_xdp);
 
     if (rt.backend == runtime_backend::tc)
     {
@@ -930,7 +824,7 @@ static void cmd_try(int argc, char **argv)
 
     if (!out_path.empty())
     {
-        write_file_all(out_path, canon);
+        cs::io_utils::write_file_all(out_path, canon);
         std::cout << "OK (canonical written): " << out_path << "\n";
     }
 
@@ -1002,9 +896,9 @@ static void cmd_invoke(const runtime_opts &rt, const std::vector<std::string> &a
     std::string err_xdp;
 
     if (rt.backend == runtime_backend::tc || rt.backend == runtime_backend::all)
-        have_tc = open_pinned_maps_for_backend(rt, cs::cs_backend::TC, tc_fds, err_tc);
+        have_tc = open_pinned_maps_for_backend(rt.pin_base, rt.iface, cs::cs_backend::TC, tc_fds, err_tc);
     if (rt.backend == runtime_backend::xdp || rt.backend == runtime_backend::all)
-        have_xdp = open_pinned_maps_for_backend(rt, cs::cs_backend::XDP, xdp_fds, err_xdp);
+        have_xdp = open_pinned_maps_for_backend(rt.pin_base, rt.iface, cs::cs_backend::XDP, xdp_fds, err_xdp);
 
     if (rt.backend == runtime_backend::tc)
     {
@@ -1109,9 +1003,9 @@ static void cmd_stepback(const runtime_opts &rt, const std::vector<std::string> 
     std::string err_xdp;
 
     if (rt.backend == runtime_backend::tc || rt.backend == runtime_backend::all)
-        have_tc = open_pinned_maps_for_backend(rt, cs::cs_backend::TC, tc_fds, err_tc);
+        have_tc = open_pinned_maps_for_backend(rt.pin_base, rt.iface, cs::cs_backend::TC, tc_fds, err_tc);
     if (rt.backend == runtime_backend::xdp || rt.backend == runtime_backend::all)
-        have_xdp = open_pinned_maps_for_backend(rt, cs::cs_backend::XDP, xdp_fds, err_xdp);
+        have_xdp = open_pinned_maps_for_backend(rt.pin_base, rt.iface, cs::cs_backend::XDP, xdp_fds, err_xdp);
 
     if (rt.backend == runtime_backend::tc)
     {

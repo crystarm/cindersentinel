@@ -58,6 +58,8 @@ endif()
 
 add_executable(cindersentinel
     src/cindersentinel.cpp
+    src/io_utils/io_utils.cpp
+    src/maps/maps.cpp
     src/policy/cbor.cpp
     src/policy/scheme.cpp
     src/policy/hash.cpp
